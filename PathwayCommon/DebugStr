@@ -1,0 +1,71 @@
+Function DebugStr(vel As Variant) As Variant
+	' This function takes any variant or object and returns a string describing its value.
+	' E.g. a string type is converted to a string enclosed in quotes, a date or number is
+	' simply converted to its default string representation, and there are special notations
+	' for arrays and lists. For any object, the type name of the object is shown.
+	Dim result$, cc$
+	Dim i%
+	If Isarray(vel) Then
+		Forall values In vel
+			result$ = result$ & ", " & DebugStr(values)
+		End Forall
+		DebugStr= "(" + Mid$(result$, 3) + ")"
+	Elseif Islist(vel) Then
+		Forall lvalues In vel
+			result$ = result$ + ", " + Listtag(lvalues) + "|" + DebugStr(lvalues)
+		End Forall
+		DebugStr= "{" + Mid$(result$, 3) + "}"
+	Else
+		Select Case Datatype(vel)
+		Case 0 ' EMPTY
+			DebugStr= "EMPTY"
+		Case 1 ' NULL
+			DebugStr= Null
+		Case 2, 3, 4, 5, 6, 7 ' any number or date
+			DebugStr= Cstr(vel)
+		Case 8 ' String
+			DebugStr= """"
+			For i% = 1 To Len(vel)
+				cc$ = Mid$(vel, i%, 1)
+				Select Case cc$
+				Case """", "\"
+					DebugStr = DebugStr & "\" & cc$
+				Case "a" To "z", "A" To "Z", "0" To "9"
+					DebugStr = DebugStr & cc$
+				Case Else
+					If Instr(".,`~/?;:'|{}[]=+-_)(*&^%$# @!", cc$) Then
+						DebugStr = DebugStr + cc$
+					Else
+						DebugStr = DebugStr & "\" & Asc(cc$) & "."
+					End If
+				End Select
+			Next
+			DebugStr = DebugStr + """"
+		Case 9 ' OLE object or NOTHING
+			If vel Is Nothing Then
+				DebugStr= "NOTHING"
+			Else
+				DebugStr= "OLE Object"
+			End If
+		Case 10 ' OLE error
+			DebugStr= "OLE Error"
+		Case 11 ' Boolean
+			If vel Then
+				DebugStr= "True"
+			Else
+				DebugStr= "False"
+			End If
+		Case Else
+			DebugStr= Typename(vel)
+			Select Case Typename(vel)
+			Case "NOTESDOCUMENT"
+				DebugStr = DebugStr & " noteID=" & vel.noteid
+			Case "NOTESVIEW"
+				DebugStr = DebugStr & {(} & vel.name & {)}
+			Case "NOTESDOCUMENTCOLLECTION"
+				DebugStr = DebugStr & {(} & vel.count & {)}
+			End Select
+		End Select
+	End If
+
+End Function

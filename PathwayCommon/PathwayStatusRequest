@@ -1,0 +1,166 @@
+Sub PathwayStatusRequest (doc As NotesDocument)
+
+%REM
+Name:
+	PathwayStatusRequest
+
+Arguments:
+	doc		selected Memo or Reply document from the Inbox
+
+Called By:
+	Agent PATHway\InboxProcessor
+
+Description:
+	Open the status document associated with the selected document.  The status document is located from
+	various criteria outlined in the PathwayFindRR function.  Then extract a summary of the request and send
+	it back to the sender.
+
+History:
+
+%END REM
+
+	Dim collRR As NotesDocumentCollection
+	Dim docRequest As NotesDocument
+	Dim docNotify As NotesDocument
+	Dim docProf As NotesDocument
+	Dim rtBodyNew As NotesRichTextItem
+	Dim rtSaveRR As NotesRichTextItem
+	Dim rtLog As NotesRichTextItem
+	Dim dtUpdate As NotesDateTime
+
+	Dim sSig As String
+	Dim sBuffer As String
+	Dim search As String
+	Dim sCurrStat As String
+	Dim sSubj As String
+	Dim sUNID As String
+
+	Dim ReqNumber As Variant
+
+	On Error Goto Sub_Error
+
+	' load the database's predefined signature
+	Set docProf = db.GetProfileDocument("CalendarProfile")
+	sSig = docProf.GetItemValue("Signature")(0)
+
+	Set docNotify = New NotesDocument(db)
+	docNotify.Form = ("Reply")
+
+	' the global "statusNames( )" list array can be populated by the action button
+	' which manually sends request status.
+	If (Iselement(statusNames("sendTo"))) Then
+		Call docNotify.ReplaceItemValue("SendTo", statusNames("sendTo"))
+	Else
+		Call docNotify.ReplaceItemValue("SendTo", doc.GetItemValue("From")(0))
+	End If
+	If (Iselement(statusNames("copyTo"))) Then
+		Call docNotify.ReplaceItemValue("CopyTo", statusNames("copyTo"))
+	End If
+
+	docNotify.SaveMessageOnSend = False
+
+	Set rtBodyNew = New NotesRichTextItem ( docNotify, "Body" )
+
+	' find the associated status document
+	sUNID = PathwayFindRR(doc)
+	Set docRequest = db.GetDocumentByUNID(sUNID)
+	ReqNumber = docRequest.GetItemValue(f_PWID)(0)
+
+	aFields(LBL_DATE) = docRequest.GetFirstItem(f_PWDATE).Text
+	aFields(LBL_ISV) = docRequest.GetFirstItem(f_PWISV).Text
+	aFields(LBL_DUR) = docRequest.GetFirstItem(f_PWDUR).Text
+	aFields(LBL_DLV) = docRequest.GetFirstItem(f_PWDLV).Text
+	aFields(LBL_HELP) = docRequest.GetFirstItem(f_PWHELP).Text
+	aFields(LBL_TAM) = docRequest.GetFirstItem(f_PWTAM).Text
+	aFields(LBL_PRI) = docRequest.GetFirstItem(f_PWPRI).Text
+	aFields(LBL_STAT) = docRequest.GetFirstItem(f_PWSTAT).Text
+
+	sSubj = "Status: RR [" & ReqNumber & "] | " & aFields(LBL_STAT) & " | " & aFields(LBL_DATE) & ", " & aFields(LBL_ISV) & ", " & _
+	aFields(LBL_DUR) & ", " & aFields(LBL_DLV) & ", " & aFields(LBL_HELP) & " | " & aFields(LBL_TAM) & ", " & aFields(LBL_PRI)
+
+	' include the original request text if available
+	If (docRequest.HasItem(f_PWREQ)) Then
+		Set rtSaveRR = docRequest.GetFirstItem(f_PWREQ)
+	Else
+		Set rtSaveRR = New NotesRichTextItem (docRequest, f_PWREQ )
+		Call rtSaveRR.AddNewLine(1)
+		Call rtSaveRR.AppendText("* * Original request text not available * *")
+		Call rtSaveRR.AddNewLine(1)
+	End If
+
+	' extract the current status
+	If (docRequest.HasItem(f_PWCOMM)) Then
+		sCurrStat = docRequest.GetFirstItem(f_PWCOMM).Text
+	Else
+		sCurrStat = "* * No current status available * *"
+	End If
+
+	' include current history log if available
+	If (docRequest.HasItem(f_PWCOMMLOG)) Then
+		Set rtLog = docRequest.GetFirstItem(f_PWCOMMLOG)
+	Else
+		Set rtLog = New NotesRichTextItem (docRequest, f_PWCOMMLOG)
+		Call rtLog.AddNewLine(1)
+		Call rtLog.AppendText("* * No status history available * *")
+		Call rtLog.AddNewLine(1)
+	End If
+
+	' build the document body
+	Call rtBodyNew.AppendStyle(rsNormal)
+	Call rtBodyNew.AppendText(statusText(0) & ReqNumber & statusText(1))
+	Call rtBodyNew.AddNewLine(2)
+
+	Call rtBodyNew.AppendText(SEP)
+	Call rtBodyNew.AddNewLine(2)
+	Call rtBodyNew.AppendStyle(rsBold)
+	Call rtBodyNew.AppendText(statusText(2))
+	Call rtBodyNew.AppendStyle(rsNormal)
+	Call rtBodyNew.AddNewLine(2)
+
+	Call rtBodyNew.AppendText(sCurrStat)
+	Call rtBodyNew.AddNewLine(2)
+
+	Call rtBodyNew.AppendText(SEP)
+	Call rtBodyNew.AddNewLine(2)
+	Call rtBodyNew.AppendStyle(rsBold)
+	Call rtBodyNew.AppendText(statusText(3))
+	Call rtBodyNew.AppendStyle(rsNormal)
+	Call rtBodyNew.AddNewLine(2)
+	Call rtBodyNew.AppendRTItem(rtLog)
+
+	Call rtBodyNew.AddNewLine(2)
+	Call rtBodyNew.AppendText(SEP)
+	Call rtBodyNew.AddNewLine(1)
+	Call rtBodyNew.AppendText(sSig)
+
+	Call rtBodyNew.AddNewLine(2)
+	Call rtBodyNew.AppendText(SEP)
+	Call rtBodyNew.AddNewLine(1)
+	Call rtBodyNew.AppendText("Original Request")
+	Call rtBodyNew.AddNewLine(2)
+	Call rtBodyNew.AppendRTItem(rtSaveRR)
+
+	Call docNotify.ComputeWithForm(False, False)
+	Call docNotify.ReplaceItemValue(f_SUBJ, sSubj)
+	Call docNotify.ReplaceItemValue("SMTPOriginator", docNotify.Reply(0))
+	Call docNotify.ReplaceItemValue("From", docNotify.Reply(0))
+	Call docNotify.Send(False)
+
+	' remove status request document from Inbox
+	Call doc.PutInFolder("($Trash)")
+	Call doc.RemoveFromFolder("($Inbox)")
+
+	' save short document to show we responded
+	Call docNotify.RemoveItem("Body")
+	Set rtBodyNew = New NotesRichTextItem ( docNotify, "Body" )
+	Call rtBodyNew.AppendText("Sent autoreply to status request")
+	Call docNotify.Save(True, False)
+	Call docNotify.PutInFolder("Sent Status Responses")
+
+Sub_Exit:
+	Exit Sub
+
+Sub_Error:
+	Call AddToStackTrace()
+
+End Sub

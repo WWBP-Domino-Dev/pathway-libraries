@@ -1,0 +1,528 @@
+%REM
+	Sub DatabaseArchive
+	Description: Comments for Sub
+%END REM
+Sub PathwayDatabaseArchive()
+
+	%REM
+	Archive all documents more than the past 3 calendar years.
+	if today is June 1, 2018.   Archive documents prior to 2015,  Keeping documents from 2015 - 2017 plus the current year.
+
+	All eligible documents will be copied to the archive.
+		The original copy of the doc will be flagged with a new PWarchived field.  This will
+		cause it to display in the 'Pathway Archived' view.  From there they can be deleted
+		once the archive process is verified to be correct.  (There's no reason to think
+		the archive will not do what it says, this is just a safety check)
+
+	%END REM
+
+	Dim session As New NotesSession
+	Dim db As NotesDatabase
+	Dim dbArch As NotesDatabase
+	Dim cd As NotesDocumentCollection
+	Dim cdS As NotesDocumentCollection
+	Dim cdF As NotesDocumentCollection
+	Dim doc As NotesDocument
+	Dim docArch As NotesDocument
+	Dim docHold As NotesDocument
+	Dim docMail As NotesDocument
+	Dim docDel As NotesDocument
+	Dim aDocRemove() As NotesDocument
+	Dim dt As NotesDateTime
+	Dim dtS As NotesDateTime
+	Dim logSend As NotesLog
+	Dim logSendDebug As NotesLog
+	Dim logMonitor As NotesLog
+	Dim aDocHold() As NotesDocument
+	Dim fromName As NotesName
+
+	Dim search As String
+	Dim searchReq As String
+	Dim searchD As String
+	Dim logText As String
+	Dim folder As String
+	Dim dispDate1 As String
+	Dim dispDate2 As String
+	Dim xR As Integer
+	Dim x1 As Integer
+	Dim x2 As Integer
+	Dim vRefs As Variant
+	Dim pointer As Single
+	Dim bRefs As Boolean
+	Dim bArchiveMemo As Boolean
+	Dim bArchiveStatus As Boolean
+	Dim bCommit As Boolean
+
+	Dim reply As Variant
+	Dim saved As Long
+	Dim currentYear As Integer
+	Dim yearCheck As Integer
+	Dim searchRange As Integer
+	Dim matchTarget As Integer
+	Dim searchCount As Integer
+	Dim cutoff As Long
+
+	Dim dtNow As New NotesDateTime(Today)
+
+	Const logAdmin = "dnurkin@us.ibm.com"
+	Const devAdmin = "owenge@us.ibm.com"
+	Const startSearch = 2200
+	On Error GoTo Sub_Error
+
+	Print "'Pathway Scheduled Agent' is about to start running ****************"
+	Stop
+
+	Print "'Pathway Scheduled Agent' now executing ****************"
+
+	On Error GoTo Sub_Error
+
+	%REM
+		===============================================================================================
+		The cutoff for archiving is the last three years plus the current year.
+		===============================================================================================
+	%END REM
+	cutoff = (365 * 3) + CLng(Format$(dtNow.Dateonly, "y"))
+
+	' Make sure the archive only happens in the production database
+	Set db = session.CurrentDatabase
+	If (InStr(db.Filename, "test") > 0) Then
+		Error 30840, "Don't archive test database"
+	Else
+		bCommit = True
+		Set logMonitor = New NotesLog("Pathway Archive Log")
+		Call logMonitor.Opennoteslog("wwbpnotesa/IBMWWBP", "Dept/Infrastructure/pathway_archive_log.nsf")
+		Call logMonitor.Logaction("Start archive")
+
+		Set logSend = New NotesLog("PATHway AutoArchiver")
+		Set logSendDebug = New NotesLog("PATHway AutoArchiver")
+
+		Call logSend.OpenMailLog(logAdmin, "PATHway Archive Report")
+		Call logSendDebug.OpenMailLog(devAdmin, "PATHway Archive Report")
+	End If
+
+	' Get the current year for comparison
+	currentYear = Year(dtNow.DateOnly)
+
+	' open the archive database if COMMIT is selected
+	If (bCommit) Then
+		Set dbArch = New NotesDatabase(ProdServer, ArchivePath & ArchiveFile)
+
+		' Make sure it's open before continuing
+		If Not (dbArch.Isopen) Then
+			If Not (dbArch.Open("", "")) Then
+				Error 30850, "Failed to open archive log: " & dbArch.Filepath
+			End If
+		End If
+
+		%REM
+			===============================================================================================
+			First cleanup the archive db, remove documents over 5 years in the past
+			===============================================================================================
+		%END REM
+
+		For x1 = 8 To 5 Step -1
+			searchReq = {(Form = "Memo" | Form = "Reply") & (@Adjust(@Created; } & x1 & {; 0; 0; 0; 0; 0) < @Now) & ! @IsAvailable(PWarchived)}
+			Set cd = dbArch.Search(searchReq, Nothing, 0)
+			If (cd.Count > 0) Then
+				Call logMonitor.Logaction("From " & Str(x1) & " years back, removed " & Str(cd.Count) & " email documents from archive database")
+				Call logSendDebug.Logaction("Search string: '" & searchReq & "'")
+				Call logSendDebug.Logaction("From " & Str(x1) & " years back, removed " & Str(cd.Count) & " email documents from archive database")
+				Call cd.Removeall(False)
+			End If
+		Next
+		For x1 = 8 To 6 Step -1
+			searchReq = {(Form = "PWayData") & (@Adjust(@Created; } & x1 & {; 0; 0; 0; 0; 0) < @Now) & ! @IsAvailable(PWarchived)}
+			Set cd = dbArch.Search(searchReq, Nothing, 0)
+			If (cd.Count > 0) Then
+				Call logMonitor.Logaction("From " & Str(x1) & " years back, removed " & Str(cd.Count) & " request documents from archive database")
+				Call logSendDebug.Logaction("Search string: '" & searchReq & "'")
+				Call logSendDebug.Logaction("From " & Str(x1) & " years back, removed " & Str(cd.Count) & " request documents from archive database")
+				Call cd.Removeall(False)
+			End If
+		Next
+	End If
+
+	%REM
+		===============================================================================================
+		Inspect all documents in the db
+		Search for "Return Receipt" and "Pathway Request Template" and "Notice" and "Appointment"
+		Delete all
+		===============================================================================================
+	%END REM
+
+	logText = "Cleaning up obsolete document types"
+	search = {Form = "Return Receipt" | Form = "Pathway Request Template" | Form = "Notice"  | Form = "Appointment"}
+	Set cd = db.Search(search, Nothing, 0)
+	If (cd.Count > 0) Then
+		Call cd.Removeall(true)
+		Call logMonitor.Logaction("Deleted " & Str(cd.Count) & " obsolete document types")
+		Call logMonitor.Logaction("---")
+	End If
+
+	%REM
+		===============================================================================================
+		Inspect all mail documents in the db
+		Try to find at least 100 matches, then stop the search.
+		If unable to match the search count and the current cutoff date is reached, stop the search.
+		===============================================================================================
+	%END REM
+
+	searchCount = 0
+	matchTarget = 300
+	searchRange = startSearch
+
+	' Generate search arguments for documents more than <searchRange> days old
+	search = {(Form = "Memo" | Form = "Reply") & (@Adjust(@Created; 0; 0; } & searchRange & {; 0; 0; 0) < @Now)}
+
+	db.FolderReferencesEnabled = True
+	Call logMonitor.Logaction("Searching for expired mail documents")
+	Do While searchCount < matchTarget
+		Set cd = db.Search(search, Nothing, 0)
+		searchCount = cd.Count
+		If (searchCount < matchTarget) Then
+			searchRange = searchRange - 14
+			' Call logMonitor.Logaction("Matched count " & Str(cd.Count) & " < " & Str(matchTarget) & ", reducing search range to " & Str(searchRange))
+			If (searchRange < cutoff) Then
+				Call logMonitor.Logaction("Search threshold below " & CStr(cutoff) & " days, exiting search")
+			End If
+			search = {(Form = "Memo" | Form = "Reply") & (@Adjust(@Created; 0; 0; } & searchRange & {; 0; 0; 0) < @Now)}
+		End If
+		Sleep 1
+	Loop
+	Call logMonitor.Logaction("Matched count " & Str(cd.Count))
+
+	%REM
+		===============================================================================================
+		Inspect all request documents in the db
+		Try to find at least 75 matches, then stop the search.
+		If unable to match the search count and the current cutoff date is reached, stop the search.
+		===============================================================================================
+	%END REM
+	searchCount = 0
+	matchTarget = 100
+	searchRange = startSearch
+
+	' Generate search arguments for documents more than <searchRange> days old
+	searchReq = {(Form = "PWayData") & (@Adjust(@Created; 0; 0; } & searchRange & {; 0; 0; 0) < @Now) & ! @IsAvailable(PWarchived)}
+	Call logMonitor.Logaction("Searching for expired request documents")
+	Do While searchCount < matchTarget
+		Set cdS = db.Search(searchReq, Nothing, 0)
+		searchCount = cdS.Count
+		If (searchCount < matchTarget) Then
+			searchRange = searchRange - 14
+			' Call logMonitor.Logaction("Matched count " & Str(cdS.Count) & " < " & Str(matchTarget) & ", reducing search range to " & Str(searchRange))
+			If (searchRange < cutoff) Then
+				Call logMonitor.Logaction("Search threshold below " & CStr(cutoff) & " days, exiting search")
+			End If
+			searchReq = {(Form = "PWayData") & (@Adjust(@Created; 0; 0; } & searchRange & {; 0; 0; 0) < @Now) & ! @IsAvailable(PWarchived)}
+		End If
+	Loop
+	Call logMonitor.Logaction("Matched count " & Str(cdS.Count))
+
+	%REM
+		===============================================================================================
+		Initialize document arrays and logging streams
+		===============================================================================================
+	%END REM
+
+	' preallocate array of documents to be archived
+	searchCount = cd.Count + cdS.Count
+	ReDim aDocHold(searchCount)
+	ReDim Preserve aDocRemove(searchCount)
+
+	xR = -1
+	x1 = 0
+	x2 = 0
+
+	' update admin log
+	Call logSend.LogAction("Final Memo Criteria: " & search)
+	Call logSend.LogAction("Final Status Criteria: " & searchReq)
+	Call logSend.LogAction(cd.Count & " mail documents to be archived, " & cdS.Count & " request documents to be archived")
+
+	' update monitoring log
+	Call logMonitor.LogAction("Final Memo Criteria: " & search)
+	Call logMonitor.LogAction("Final Status Criteria: " & searchReq)
+	Call logMonitor.LogAction(cd.Count & " mail documents to be archived, " & cdS.Count & " request documents to be archived")
+
+	Call logSend.LogAction("After completion check the Archived folder for the documents that were moved.  Once you are confident that they exist in the Archive database they can be deleted from the Archive folder to complete the cleanup operation.")
+	Call logSend.Logaction("Proceeding to archive")
+	Call logMonitor.LogAction("=================================================")
+	Call logMonitor.LogAction("=================================================")
+
+	Call logMonitor.LogAction("---")
+	Call logMonitor.LogAction("1. Copying " & cd.Count & " mail docs")
+	Call logSend.LogAction("1. Copying " & cd.Count & " mail docs")
+
+	%REM
+		===============================================================================================
+		Process retrieved mail documents
+		===============================================================================================
+	%END REM
+
+	Set doc = cd.GetFirstDocument
+	Do Until doc Is Nothing
+		' now archive
+		xR = xR + 1
+		x2 = x2 + 1
+
+		' Extract name for logging entry
+		Set fromName = New NotesName(doc.GetItemValue("From")(0))
+
+		' copy selected document to archive db
+		If (bCommit) Then
+			Set docArch = doc.CopyToDatabase(dbArch)
+		End If
+
+		logText = x2 & ".  '" & Left$(doc.Subject(0), 40) & "',  Memo created " & Format$(doc.Created, "mm/dd/yyyy hh:nn:ss AM/PM") & " from " & fromName.Common
+
+		' oddly. some documents don't have the FolderReferences property, and there doesn't seem to
+		' be a way to verify the existence of a property.  so set up a special error handler for this section
+		On Error GoTo Sub_ErrorFolders
+
+		' try to add new document to all folders if it was email
+		bRefs = False
+
+		vRefs = doc.FolderReferences
+		If (IsArray(vRefs)) Then
+			ForAll fld In vRefs
+				If (Len(fld) > 0) Then
+					If (bCommit) Then
+						folder = fld
+						Call docArch.PutInFolder(fld, True)
+					End If
+					Call logMonitor.LogAction(logText & " => in folder " & fld)
+					bRefs = True
+				End If
+			End ForAll
+		End If
+
+UseInbox:
+		' if no valid folder was found, just put it in the Inbox
+		folder = "Inbox"
+		If (Not bRefs) Then
+			Call docArch.PutInFolder("($Inbox)")
+			Call logMonitor.LogAction(logText & " => in the Inbox")
+		End If
+
+NoFolders:
+		On Error GoTo Sub_Error
+
+		' place doc on the commit queues
+		If (xR > UBound(aDocHold)) Then
+			ReDim Preserve aDocHold(xR + 10)
+			ReDim Preserve aDocRemove(xR + 10)
+		End If
+
+		' save copy of the archive copy and of the local copy.  this way we can defer committing any changes until all are processed successfully.
+		Set aDochold(xR) = docArch
+		Set aDocRemove(xR) = doc
+		saved = saved + doc.Size
+Archived_Doc:
+		pointer = x2 / 100
+		If (Fix(pointer) > 0 And Fraction(pointer) = 0) Then
+			Call logMonitor.LogAction("Processing doc " & x2 & " out of " & cd.Count & " mail docs")
+			Sleep 2
+		End If
+
+		Set doc = cd.GetNextDocument(doc)
+	Loop
+
+	%REM
+		===============================================================================================
+		Process collection of status docs
+		===============================================================================================
+	%END REM
+
+	Call logMonitor.LogAction("---")
+	Call logMonitor.LogAction("2. Copying " & cdS.Count & " status docs to the archive")
+	Call logSend.LogAction("2. Copying " & cdS.Count & " status docs to the archive")
+	x1 = 0
+	x2 = 0
+	Set doc = cdS.GetFirstDocument
+	Do Until doc Is Nothing
+		x1 = x1 + 1
+
+		' only archive Status documents from selected past year
+		Set dt = doc.GetFirstItem("PWayNeeded").DateTimeValue
+
+		If Not (IsNumeric(Year(dt.DateOnly))) Then
+			yearCheck = 0
+		Else
+			yearCheck = Year(dt.DateOnly)
+		End If
+
+		If (yearCheck <= currentYear) Then
+			xR = xR + 1
+			x2 = x2 + 1
+
+			' create new doc copy in archive db
+			Set docArch = doc.CopyToDatabase(dbArch)
+
+			dispDate1 = Format$(doc.Created, "mm/dd/yyyy hh:nn:ss AM/PM")
+			dispDate2 = Format$(doc.GetFirstItem("PWayNeeded").Text, "mm/dd/yyyy hh:nn:ss AM/PM")
+
+			Call logMonitor.LogAction("  " & x2 & ".  '" & doc.PWayId(0) & "' Created " & dispdate1 & ", Engagement date " & dispDate2)
+
+			' place doc on the commit queues
+			If (xR > UBound(aDocHold)) Then
+				ReDim Preserve aDocHold(xR + 10)
+				ReDim Preserve aDocRemove(xR + 10)
+			End If
+
+			' save copy of the archive copy and of the local copy.  this way we can defer committing any changes until all are processed successfully.
+			Set aDochold(xR) = docArch
+			Set aDocRemove(xR) = doc
+		Else
+			Set dtS = New NotesDateTime(doc.Created)
+			searchD = {Form = "} & doc.Form(0) & {" & @Text(@Created; "D0T0S2") = "} & dtS.DateOnly & " " & dtS.TimeOnly & {"}
+			Set cdF = dbArch.Search(searchD, Nothing, 1)
+			If (cdF.Count > 0) Then
+				Call logMonitor.LogAction("    copy found in archive")
+			End If
+			Call logMonitor.LogAction("  " & x2 & ".  '" & doc.PWayId(0) & "' Engagement year more recent, will pick this up in future archive.  Request year = " & yearCheck & " and test year = " & currentYear)
+
+		End If
+		saved = saved + doc.Size
+
+		' show progress
+		pointer = x2 / 10
+		If (Fix(pointer) > 0 And Fraction(pointer) = 0) Then
+			Call logMonitor.LogAction("Processing doc " & x1 & " out of " & cdS.Count & " status docs, " & x2 & " archived")
+			Sleep 2
+		End If
+
+		' get next doc
+		Set doc = cdS.GetNextDocument(doc)
+	Loop
+
+	' Prepare to commit the documents to the archive database
+	If (bCommit) Then
+		' shrink the commit queues to remove allocated entries never used
+		For x2 = UBound(aDocHold) To 0 Step -1
+			Set doc = aDocHold(x2)
+			If Not (doc Is Nothing) Then
+				Exit For
+			End If
+		Next
+		ReDim Preserve aDocHold(x2)
+		ReDim Preserve aDocRemove(x2)
+
+		' commit the documents created in the archive, currently stored in the aDocHold array
+		Call logMonitor.LogAction("---")
+		Call logMonitor.LogAction("3. Saving copied documents in archive")
+		Call logSend.LogAction("3. Saving copied documents in archive")
+
+		For x2 = 0 To UBound(aDocHold)
+			Set doc = aDocHold(x2)
+
+			' make sure we don't have a ghost object
+			If (doc Is Nothing) Then
+				GoTo SaveNext
+			End If
+
+			' check for copy already in the archive
+			Set dtS = New NotesDateTime(doc.Created)
+			searchD = {Form = "} & doc.Form(0) & {" & @Text(@Created; "D0T0S2") = "} & dtS.DateOnly & " " & dtS.TimeOnly & {"}
+			Set cdF = dbArch.Search(searchD, Nothing, 1)
+			If (cdF.Count > 0) Then
+				logText = "  " & x2 & ". " & Left$(doc.Subject(0), 40) & "' created " & Format$(doc.Created, "mm/dd/yyyy hh:nn:ss AM/PM") & ", * duplicate, not saved"
+				Call logMonitor.LogAction("   " & logText)
+				GoTo SaveNext
+			End If
+
+			' looks okay, save the archive document
+			' logText = "  " & x2 & ". " & Left$(doc.Subject(0), 40) & "' created " & Format$(doc.Created, "mm/dd/yyyy")
+			' Call logMonitor.LogAction("   " & logText)
+			Call doc.Save(True, False)
+SaveNext:
+		Next
+
+		' now flag the archived documents
+		Call logMonitor.LogAction(" ")
+		Call logMonitor.LogAction("Flagging archived documents")
+		Call logSend.LogAction("Flagging archived documents")
+
+		On Error GoTo Sub_ErrorDelete
+
+		For x2 = 0 To UBound(aDocRemove)
+			Set doc = aDocRemove(x2)
+			logText = "  " & x2 & ". " & Left$(doc.Subject(0), 40) & "' created " & Format$(doc.Created, "mm/dd/yyyy")
+			' Call logMonitor.LogAction("   " & logText)
+			Call doc.ReplaceItemValue("PWarchived", "1")
+			Call doc.save(False, False)
+Deleted_Doc:
+		Next
+	End If
+
+Sub_Exit:
+
+	' Only log if running on production db
+	If (bCommit) Then
+		Call logMonitor.LogAction("A summary report is being mailed to the admin")
+		Call logMonitor.LogAction("Saved bytes: " & CStr(saved))
+		Call logMonitor.Close()
+
+		Call logSend.LogAction("Saved bytes: " & CStr(saved))
+		Call logSendDebug.LogAction("Saved bytes: " & CStr(saved))
+
+		Call logSend.Close
+		Call logSendDebug.Close
+	End If
+
+	Exit Sub
+
+Sub_Error:
+	' Running on test db, just exit
+	If (Err = 30840) Then
+		Resume Sub_Exit
+	End If
+
+	Call logMonitor.Logerror(Err, x2 & ". [A]:   '" & Error & "' on line " & Erl & ": " & logText)
+	Call logSendDebug.Logerror(Err, x2 & ". [A]:   '" & Error & "' on line " & Erl & ": " & logText)
+
+	If (Err = 17412 Or Err = 549 Or Err = 4005) Then
+		Call logSendDebug.LogError(Err, "Resuming with next doc")
+		Resume Archived_Doc
+	End If
+
+	' Sometimes the server fails to respond.  This is probably temporary, so take a nap and try the next one.  If we bail here then none
+	' of the archived documents will be flagged as such, which will cause them to be picked up on the next archive cycle.
+	If (Err = 4000) Then
+		Sleep 10
+		Resume SaveNext
+	End If
+
+	Resume Sub_Exit
+
+Sub_ErrorDelete:
+
+	If (Err = 4005) Then
+		Call logMonitor.Logerror(4005, "  already deleted.")
+		Call logSendDebug.Logerror(4005, "  already deleted.")
+		Resume Deleted_Doc
+	Else
+		Call logMonitor.Logerror(Err, x2 & ". [B]:  '" & Error & "' on line " & Erl & ": " & logText)
+		Call logSendDebug.Logerror(Err, x2 & ". [B]:  '" & Error & "' on line " & Erl & ": " & logText)
+	End If
+
+	Resume Deleted_Doc
+
+Sub_ErrorFolders:
+	Call logMonitor.Logerror(Err, x2 & ". [C]:   '" & Error & "' on line " & Erl & ": " & logText)
+	Call logSendDebug.Logerror(Err, x2 & ". [C]:   '" & Error & "' on line " & Erl & ": " & logText)
+
+	If (Err = 1028 Or Err = 4005 Or Err = 17412) Then
+		If (folder = "Inbox") Then
+			Resume NoFolders
+		Else
+			Resume UseInbox
+		End If
+	Else
+		If (Err = 549) Then
+			Resume Archived_Doc
+		End If
+	End If
+
+	Resume Sub_Exit
+
+End Sub

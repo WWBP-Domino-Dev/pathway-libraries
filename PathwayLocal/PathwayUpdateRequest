@@ -1,0 +1,418 @@
+Sub PathwayUpdateRequest (doc As NotesDocument)
+
+%REM
+Name:
+	PathwayUpdateRequest
+
+Arguments:
+	doc		selected Memo or Reply document from the Inbox
+
+Called By:
+	Action Menu selection
+
+Description:
+	Access the status document associated with the selected document.  The status document is located from
+	various criteria outlined in the PathwayFindRR function.   The user is presented with a dialog box using the
+	same form used in PathwayTemplateDialog.  There are some fields in the dialog box form which are not visible
+	when updating, so a common hide-when formula governs which fields and captions are presented.
+
+	The status document can't be updated directly, as all of the fields are computed.  This was done because the
+	incoming mail agent could be updating these same documents, and using this dialog eliminated the need to
+	continually switch the SaveOptions field in and out.
+
+	As in request creation, the fields are validated just for existence, not for content.  The only exception is the type
+	of engagement duration.  For example, you can't specify "2 Custom" or "1 to 2 Weeks".
+
+History:
+	9/12/2006: Removed check for Advance Notices
+%END REM
+
+	Dim docInbox As NotesDocument
+	Dim docStatus As NotesDocument
+	Dim rtLog As NotesRichTextItem
+	Dim rtNav As NotesRichTextNavigator
+	Dim dtRR As NotesDateTime
+	Dim dtLog As NotesDateTime
+	Dim dtEnd As NotesDateTime
+	Dim nmFolder As NotesName
+	Dim docName As NotesName
+	Dim lockObj As New DocumentLock
+
+	Dim sErr As String
+	Dim sLog As String
+	Dim sSubject As String
+	Dim errField As String
+	Dim sRev As String
+
+	Dim nErr As Integer
+	Dim nDays As Integer
+	Dim nReq As Integer
+	Dim nRev As Integer
+
+	Dim bHaveMemo As Boolean
+	Dim bUpdateOK As Boolean
+	Dim bHadText As Boolean
+
+	Dim vReply As Variant
+
+	Const TEMPLOG = "PWayTempLog"
+
+	On Error Goto Sub_Error
+
+	Const tabChr = {	}
+
+	Stop
+
+	If (ws Is Nothing) Then
+		Set ws = New NotesUIWorkspace
+	End If
+
+	' initialize the log file
+	Set stream = session.CreateStream
+	Call stream.Open(debugFile, "ASCII")
+	If (stream.Bytes > LOGLIMIT) Then
+		Call stream.Truncate
+	End If
+	Call stream.WriteText(" ", EOL_CRLF)
+	Call stream.WriteText(SEP, EOL_CRLF)
+	Call stream.Close
+
+	Set pwayLog = New NotesLog("PATHway Update Log")
+	Call pwayLog.OpenFileLog(debugFile)
+	Call pwayLog.LogAction("PathwayUpdateRequest()")
+
+	' extract this from subroutine PathwayProcessNewInit
+	' Define array of field names for template field editing.
+	' Used in library routines PathwayLocal/ProcessTemplate and PathwayLocal/TemplateDialog.
+	aTemplateFields(LBL_TAM) = "Requestor Name"
+	aTemplateFields(LBL_ISV) = "Partner Name"
+	aTemplateFields(LBL_STAT) = "PATHway Status"
+	aTemplateFields(LBL_PRI) = "Request Priority"
+	aTemplateFields(LBL_HELP) = "Type of Service"
+	aTemplateFields(LBL_DUR) = "Length of Engagement"
+	aTemplateFields(LBL_DLV) = "Delivery Method"
+	aTemplateFields(LBL_DATE) = "Engagement Start Date"
+	aTemplateFields(LBL_ADDR) = "Requestor's Email Address"
+	aTemplateFields(LBL_BLOCK) = "Duration Increment (months, weeks, etc.)"
+	aTemplateFields(LBL_FCLNAME) = "Focal Point Name"
+	aTemplateFields(LBL_FCLNBR) = "Focal Point Phone Number"
+	aTemplateFields(LBL_OWN) = "Request Owner"
+	aTemplateFields(LBL_PRTYPE) = "Partner Type"
+	aTemplateFields(LBL_JUST) = "Business Justification"
+
+	' lock the document(s).
+	' normally using an Inbox document so it will find the status document.  alternatively, could update the status document directly.
+	' in either case, load the document object(s) from the lock object which has server copies of the documents.
+	Call lockObj.lockDocuments(doc)
+	If (doc.Form(0) = "Memo" Or doc.Form(0) = "Reply") Then
+		Set docInbox = lockObj.inboxDoc
+		Set docStatus = lockObj.statusDoc
+		bHaveMemo = True
+	Else
+		Set docStatus = lockObj.inboxDoc
+	End If
+
+	' set the template hide-when switch
+	Call docStatus.ReplaceItemValue("Update", "1")
+
+	' first make sure this value is numeric.
+	If (Not Isnumeric(doc.GetItemValue(f_PWID)(0))) Then
+		' Error 30180, "The request id value is invalid"
+	End If
+
+	nReq = Cint(docStatus.GetItemValue(f_PWID)(0))
+
+	' 4/13/2016 update
+	If (docStatus.Hasitem(f_PWMRR)) Then
+		sRev = docStatus.GetItemValue(f_PWMRR)(0)
+	Else
+		sRev = ""
+	End If
+
+
+	' debug
+	' vReply = True
+
+	' process update dialog
+	Do While Not vReply
+		vReply =  ws.DialogBox("PWayCreate", True, True, False, False, False, False, "Update request " & nReq, docStatus, True)
+		If (Not vReply) Then
+			Error ERR_CANCEL, MSG_CANCEL
+		End If
+
+		' save the fields for validation
+		Erase aTemplateInput
+		aTemplateInput(LBL_TAM) = Fulltrim(docStatus.GetItemValue(f_PWTAM)(0))
+		aTemplateInput(LBL_ISV) = docStatus.GetItemValue(f_PWISV)(0)
+		aTemplateInput(LBL_STAT) = docStatus.GetItemValue(f_PWSTAT)(0)
+		aTemplateInput(LBL_PRI) = docStatus.GetItemValue(f_PWPRI)(0)
+		aTemplateInput(LBL_HELP) = docStatus.GetItemValue(f_PWHELP)(0)
+		aTemplateInput(LBL_DUR) = docStatus.GetItemValue(f_PWDUR)(0)
+		aTemplateInput(LBL_DLV) = docStatus.GetItemValue(f_PWDLV)(0)
+
+		' 6/15/2010: no need for the PW Owner field
+		' aTemplateInput(LBL_OWN) = docStatus.GetItemValue(f_PWOWN)(0)
+
+		aTemplateInput(LBL_ADDR) = docStatus.GetItemValue(f_PWADDR)(0)
+		aTemplateInput(LBL_BLOCK) = docStatus.GetItemValue(f_PWDURTYP)(0)
+
+		Set dtRR = docStatus.GetFirstItem(f_PWDATE).DateTimeValue
+		If (Len(docStatus.GetFirstItem(f_PWDATE).Text) > 0) Then
+			If (dtRR.IsValidDate) Then
+				aTemplateInput(LBL_DATE) = dtRR.DateOnly
+			Else
+				aTemplateInput(LBL_DATE) = ""
+			End If
+		Else
+			aTemplateInput(LBL_DATE) = ""
+		End If
+
+		' process the field array, checking for data but not evaluating content
+		sErr = ""
+		nErr = 0
+		Forall value In aTemplateInput
+			If (Len(value) = 0) Then
+				nErr = nErr + 1
+				sErr = sErr & nErr & ": " & aTemplateFields(Listtag(value)) & " must have a value" & NL
+			Else
+				If (value Like "*,*" Or value Like "*|*") Then
+					nErr = nErr + 1
+					sErr = sErr & nErr & ": " & aTemplateFields(Listtag(value)) & " must not contain a comma or bar: '" & value & NL
+				End If
+			End If
+		End Forall
+
+		' check for mismatch between duration fields
+		If (docStatus.GetItemValue(f_PWDURTYP)(0) <> "Custom"  And Not Isnumeric(docStatus.GetItemValue(f_PWDUR)(0))) Then
+			nErr = nErr + 1
+			sErr = sErr & nErr & ": " & "If Duration is not numeric, then enter ""Custom"" in the type field" & NL
+		End If
+
+		If (docStatus.GetItemValue(f_PWDURTYP)(0) = "Custom"  And Isnumeric(docStatus.GetItemValue(f_PWDUR)(0))) Then
+			nErr = nErr + 1
+			sErr = sErr & nErr & ": " & "If Duration is numeric, then enter something other than""Custom"" for the type" & NL
+		End If
+
+		' 11/11/2008:  Offering Type no longer used
+%REM
+		' For-Fee engagements need an Offering Type
+		If (docStatus.GetItemValue(f_PWREV)(0) = "Fee" And docStatus.GetItemValue(f_PWREVTYP)(0) = "") Then
+			nErr = nErr + 1
+			sErr = sErr & nErr & ": " & "If Delivery is for-fee an Offering Type is required" & NL
+		End If
+%END REM
+
+		' prompt again if any errors were encountered
+		If (Len(sErr) > 0) Then
+			sErr = "Field validation errors:" & NL & sErr
+			Msgbox sErr, 48, "Update request" & nReq
+			vReply = False
+		End If
+	Loop
+
+	Stop
+
+	' update the ending date in case the duration changed
+	Set dtEnd = New NotesDateTime(docStatus.GetFirstItem("PWayNeeded").Text)
+
+	' 4/13/2016 update
+	' first add the f_PWMRRYR field if it doesn't exist and calculate if there an MRR value
+	If Not (docStatus.Hasitem(f_PWMRRYR)) Then
+		If (Len(docStatus.GetFirstItem(f_PWMRR).Text) > 0) Then
+			Call docStatus.Appenditemvalue(f_PWMRRYR, (13 - Month(dtRR.Dateonly)) * docStatus.GetItemValue(f_PWMRR)(0))
+		End If
+	Else
+		' If MRR changed, recalc the first year's total MRR
+		If (docStatus.GetItemValue(f_PWMRR)(0) <> sRev) Then
+			Call docStatus.Replaceitemvalue(f_PWMRRYR, (13 - Month(dtRR.Dateonly)) * docStatus.GetItemValue(f_PWMRR)(0))
+		End If
+	End If
+
+	nDays = PathwayCalcDuration(docStatus.GetItemValue("PWayDuration")(0), docStatus.GetItemValue("PWayDurationType")(0), dtEnd)
+	Call docStatus.ReplaceItemValue("PWayEndNeeded", dtEnd)
+
+	' validation complete, now check if the communication log was updated
+	If (Len(docStatus.GetItemValue(TEMPLOG)(0)) > 0) Then
+		sLog = docStatus.GetItemValue(TEMPLOG)(0)
+
+		' set the timestamp for the log entry
+		Set dtLog = New NotesDateTime("")
+		Call dtLog.SetNow
+
+		' get handle to log field
+		If (docStatus.HasItem(f_PWCOMMLOG)) Then
+			If (Len(docStatus.GetFirstItem(f_PWCOMMLOG).Text) > 0) Then
+				Set rtLog = docStatus.GetFirstItem(f_PWCOMMLOG)
+			Else
+				Call docStatus.RemoveItem(f_PWCOMMLOG)
+				Set rtLog = docStatus.CreateRichTextItem(f_PWCOMMLOG)
+			End If
+		Else
+			Set rtLog = docStatus.CreateRichTextItem(f_PWCOMMLOG)
+		End If
+
+		' create navigator to add text in the beginning of the log field
+		Set rtNav = rtLog.CreateNavigator
+		If (rtNav.FindFirstElement(RTELEM_TYPE_TEXTPARAGRAPH)) Then
+			Call rtLog.BeginInsert(rtNav)
+			bHadText = True
+		End If
+
+		' replace current log entry and then append to the cumulative log
+		Call docStatus.ReplaceItemValue(f_PWCOMM, sLog)
+
+		Call rtLog.AppendText(dtLog.LSLocalTime & ": = = = = updated by " & session.CommonUserName & ": = = = = = =" & NL)
+		Call rtLog.Appendtext("In response to message:" & NL)
+		Call rtLog.Appendtext(tabChr & "Date: " & doc.Getfirstitem("PostedDate").Text & NL)
+
+		Stop
+
+		' Some documents are missing default fields so check for them first
+		If (doc.Hasitem("From")) Then
+			If (Len(doc.Getfirstitem("From").Text) > 0) Then
+				Set docName = New NotesName(doc.Getfirstitem("From").Text)
+				Call rtLog.Appendtext(tabChr & "From: " & docName.Common & NL)
+			Else
+				Call rtLog.Appendtext(tabChr & "From: * From field is null" & NL)
+			End If
+		Else
+			Call rtLog.Appendtext(tabChr & "From: * From field is missing" & NL)
+		End If
+
+		If (doc.Hasitem("SendTo")) Then
+			If (Len(doc.Getfirstitem("SendTo").Text) > 0) Then
+				ForAll sendto In doc.Getfirstitem("SendTo").Values
+					Set docName = New NotesName(sendto)
+					Call rtLog.Appendtext(tabChr & "To:     " & docName.Common & NL)
+				End ForAll
+			Else
+				Call rtLog.Appendtext(tabChr & "To:     * SendTo field is null" & NL)
+			End If
+		Else
+			Call rtLog.Appendtext(tabChr & "To:     * SendTo field is missing" & NL)
+		End If
+
+		If (doc.Hasitem("CopyTo")) Then
+			If (Len(doc.Getfirstitem("CopyTo").Text) > 0) Then
+				ForAll copy In doc.Getfirstitem("CopyTo").Values
+					Set docName = New NotesName(copy)
+					Call rtLog.Appendtext(tabChr & "CC:    " & docName.Common & NL)
+				End ForAll
+			Else
+				Call rtLog.Appendtext(tabChr & "CC:    * CopyTo field is null" & NL)
+			End If
+		Else
+			Call rtLog.Appendtext(tabChr & "CC:    * CopyTo field is missing" & NL)
+		End If
+
+		Call rtLog.Appendtext(NL)
+
+		Call rtLog.AppendText(sLog & NL & NL)
+
+		If (bHadText) Then
+			Call rtLog.EndInsert
+		End If
+
+	End If
+
+	' always remove the holding field
+	Call docStatus.RemoveItem(TEMPLOG)
+
+	' if we've lost the lock, take a quick exit
+	If Not (lockObj.checkLock) Then
+		Error ERR_LOCK_REVOKED, MSG_LOCK_REVOKED
+	End If
+
+	' now update the Inbox document if there is one
+	If (bHaveMemo) Then
+		Call docInbox.ReplaceItemValue(f_PWID, nReq)
+		Call docInbox.ReplaceItemValue(f_PWTAM, aTemplateInput(LBL_TAM))
+		Call docInbox.ReplaceItemValue(f_PWISV, aTemplateInput(LBL_ISV))
+		Call docInbox.ReplaceItemValue(f_PWSTAT, aTemplateInput(LBL_STAT))
+
+		' 6/15/2010: no need for the PW Owner field
+		' Call docInbox.ReplaceItemValue(f_PWOWN, aTemplateInput(LBL_OWN))
+		Call docInbox.ReplaceItemValue(f_PWADDR, aTemplateInput(LBL_ADDR))
+		Call docInbox.ReplaceItemValue(f_PWPRI, aTemplateInput(LBL_PRI))
+		Call docInbox.ReplaceItemValue(f_PWHELP, aTemplateInput(LBL_HELP))
+		Call docInbox.ReplaceItemValue(f_PWDUR, aTemplateInput(LBL_DUR))
+		Call docInbox.ReplaceItemValue(f_PWDURTYP, aTemplateInput(LBL_BLOCK))
+		Call docInbox.ReplaceItemValue(f_PWDATE, dtRR)
+
+		' modify array values for Subject line:  "<Duration><Type>" = "2 Days", or "<Duration>" = "More than a month"
+		If (aTemplateInput(LBL_BLOCK) = "Custom") Then
+			aTemplateInput(LBL_BLOCK) = ""
+		Else
+			aTemplateInput(LBL_DUR) = aTemplateInput(LBL_DUR) & " "
+		End If
+
+		' the Subject line must be formatted
+		sSubject = "RR [" & Cstr(nReq) & "] | " & _
+		aTemplateInput(LBL_STAT) & " | " & _
+		dtRR.DateOnly & ", " & _
+		aTemplateInput(LBL_ISV) & ", " & _
+		aTemplateInput(LBL_DUR) & aTemplateInput(LBL_BLOCK) & ", " & _
+		aTemplateInput(LBL_DLV) & ", " & _
+		aTemplateInput(LBL_HELP) & " | " & _
+		aTemplateInput(LBL_TAM) & ", " & _
+		aTemplateInput(LBL_PRI)
+		Call docInbox.ReplaceItemValue("Subject", sSubject)
+
+		Call docInbox.ReplaceItemValue("StatusUpd", 1)
+		Call docInbox.ReplaceItemValue("StatusTimeStamp", dtLog)
+		Call docInbox.ReplaceItemValue("PWayUpdate", dtLog)
+
+		Call docInbox.Save(True, False, True)
+	End If
+
+	' save the status document changes
+	Call docStatus.ReplaceItemValue("PWayUpdate", dtLog)
+	Call docStatus.ComputeWithForm(False, False)
+	Call docStatus.Save(True, False, True)
+	bUpdateOK = True
+
+Sub_Exit:
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.releaseDocuments(False)
+	End If
+
+	' if process completed normally, a couple of more tasks to do
+	If (bUpdateOK) Then
+		' if running on a local replica, try to replicate to pick up the new documents
+		If (db.Server = "" And foundServer) Then
+			db.Replicate(serverName)
+		End If
+
+		Call ws.ViewRefresh
+	End If
+
+	If (Not pwayLog Is Nothing) Then
+		Call pwayLog.Close
+	End If
+
+	Exit Sub
+
+Sub_Error:
+	If (Err = ERR_CANCEL) Then
+		Resume Sub_Exit
+	End If
+
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.releaseDocuments(False)
+		Set lockObj = Nothing
+	End If
+
+	' log this because some status docs are generating an error trying to convert the id to an integer
+	If (Err = 13) Then
+		Call LogEvent("Using status doc for '" & docStatus.GetItemValue(f_PWID)(0) & "'", SEVERITY_MEDIUM, Nothing)
+	End If
+
+	If (Err = 4037) Then
+		Call logevent("", SEVERITY_HIGH, Nothing)
+
+		vReply = ws.Prompt(PROMPT_OK, "Mac problem", "Debug file is '" & debugFile & "' on platform " & session.Platform)
+	End If
+
+	Call AddToStackTrace()
+
+End Sub

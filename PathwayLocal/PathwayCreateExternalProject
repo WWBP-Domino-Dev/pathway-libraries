@@ -1,0 +1,377 @@
+%REM
+	Sub PathwayCreateExternalProject
+	Description: The WWBP Projects database is tightly coupled to PATHway.
+		Each project document is tied to a specific PATHway request (there
+		are some exceptions, but they are few in number).  This subroutine
+		will automatically create new project documents when the PATHway
+		request is closed and assigned. It will notify the primary resource
+		on the request so they can complete the project document.
+	Called By:
+		PathwayCloseRequest
+	Author:
+		George Owen
+	Date:
+		12-28-2011
+%END REM
+Sub PathwayCreateExternalProject (docStatus As NotesDocument)
+
+	Dim session As NotesSession
+	Dim ws As NotesUIWorkspace
+	Dim uiDocA As NotesUIDocument
+	Dim uiDocB As NotesUIDocument
+	Dim doc As NotesDocument
+	Dim docDummy As NotesDocument
+	Dim docDummyUI As NotesUIDocument
+	Dim docPATH As NotesDocument
+	Dim docProfile As NotesDocument
+	Dim dbPWay As NotesDatabase
+	Dim dbProj As NotesDatabase
+	Dim dc As NotesDocumentCollection
+	Dim vw As NotesView
+	Dim itm As NotesItem
+	Dim rtField As NotesRichTextItem
+	Dim rtDummy As NotesRichTextItem
+	Dim rtnav As NotesRichTextNavigator
+	Dim rtStyleNorm As NotesRichTextStyle
+	Dim rtStyleBold As NotesRichTextStyle
+	Dim rtStyleP As NotesRichTextParagraphStyle
+	Dim rtStylesP(1 To 2) As NotesRichTextParagraphStyle
+
+	Dim nX As Integer
+	Dim nY As Integer
+	Dim nR As Integer
+
+	Dim key As String
+	Dim keyList(1) As String
+	Dim sMsg As String
+	Dim search As String
+	Dim ResName As String
+	Dim ResAddr As String
+	Dim aTemplateEntries() As String
+	Dim aTemplateSections() As String
+	Dim resTypeList List As String
+	Dim resTypeArray() As String
+	Dim resNamesArray() As String
+
+	Dim bEditPass As Boolean
+	Dim bReject As Boolean
+	Dim bFoundClass As Boolean
+	Dim bRetry As Boolean
+	Dim bNotify As Boolean
+
+	Dim vReply As Variant
+	Dim vResource As Variant
+
+	Dim docAdmin As NotesDocument
+	Dim rtAdmin As NotesRichTextItem
+	Dim sendList(3) As String
+
+	' 10/23/2009 change
+	Const ADMIN_1 = "deger@us.ibm.com"
+	Const ADMIN_2 = "dugslade@us.ibm.com"
+	Const ADMIN_DEV = "owenge@us.ibm.com"
+
+	Const DEFSTATUS = "Active"
+	Const REJSTATUS = "Rejected"
+	Const MB_ICONEXCLAMATION = 48
+
+	' Set up the current environment
+	Set session = New NotesSession
+	Set ws = New NotesUIWorkspace
+	Set dbPWay = session.Currentdatabase
+
+	On Error GoTo SubError
+
+	bRetry = False
+
+	' =========================================================================================
+	' Connect to the Projects database
+	Set dbProj = New NotesDatabase(ProdServer, "Dept/WWBP/wwbp_projects")
+
+
+	' Sep 2017 updates
+	' This routine can be called manually, make sure a project document for this request
+	' doesn't already exist.
+	Set vw = dbProj.GetView("Project ID Search")
+	Set docDummy = vw.Getdocumentbykey(docStatus.Getfirstitem("PWayID").Text, True)
+	If Not (docDummy Is Nothing) Then
+		vReply = ws.Prompt(PROMPT_OK, "Project Database Create", "The Project Database already has an entry for " & docStatus.Getfirstitem("PWayID").Text)
+		Exit Sub
+	End If
+
+	' Re-target view to find resource names
+	Set vw = dbProj.GetView("Project Keywords")
+	keyList(0) = "Resources"
+
+	' Sep 2017 updates
+	' First get an array of all resource names to select from
+	Set dc = vw.Getalldocumentsbykey(keyList(0), True)
+	ReDim Preserve resNamesArray(dc.Count)
+
+	Set docDummy = dc.Getfirstdocument()
+	nX = 0
+
+	' Build names array from Resource documents
+	resNamesArray(0) = "Select"
+	Do Until docDummy Is Nothing
+		nX = nX + 1
+		resNamesArray(nX) = docDummy.Getfirstitem("ProjKeyValue").Text
+
+		Set docDummy = dc.Getnextdocument(docDummy)
+	Loop
+
+	' If request still open, prompt user to select resource name, else take it from the request doc
+	If (docStatus.Hasitem("PWayClosed") And docStatus.Getfirstitem("PWayClosed").Text <> "") Then
+		keyList(1) = docStatus.Getitemvalue("PWayResName")(0)
+		bNotify = False
+	Else
+		' Request is still open, need to request resource
+		vResource = ws.Prompt(PROMPT_OKCANCELLIST, "Project Database Create", "Enter primary resource Notes name", resNamesArray(0), resNamesArray)
+		keyList(1) = vResource
+
+		' Update PW request doc with resource now
+		If (Len(vResource) > 0) Then
+			Call docStatus.Replaceitemvalue("PWayResName", vResource)
+			Call docStatus.Save(True, False, False)
+		End If
+
+		bNotify = True
+	End If
+
+	' Only continue if the resource assigned to the PATHway is a member in the Project database
+	Set docDummy = vw.GetDocumentByKey(keyList, True)
+	' ResAddr = docStatus.Getitemvalue("PWayResAddr")(0)
+
+	' If there are no matches then don't continue
+	If (docDummy Is Nothing) Then
+		vReply = ws.Prompt(PROMPT_YESNO, "Project Database Create", "The resource " & keyList(1) & " is not in the Project Database member list so a project document will not be created.  Do you want to edit the resource name?")
+		Exit sub
+	End If
+
+	' =========================================================================================
+	' Jan 21, 2008: new template fields
+	ReDim aTemplateEntries(1 To 8)
+	ReDim aTemplateSections(1 To 8)
+
+	aTemplateSections(1) = "Please add project description, contacts, locations, doc, status, final reports, etc.... in following section. "
+	aTemplateEntries(1) = ""
+	aTemplateSections(2) = "Issue:"
+	aTemplateEntries(2) = " (Description of project)"
+	aTemplateSections(3) = "Company Contact:"
+	aTemplateEntries(3) = " (Contacts you will be working with on the project, such as: Management, Development, Support)"
+	aTemplateSections(4) = "IBM Contacts:"
+	aTemplateEntries(4) = "  (This section is for the internal contacts you will be working with, such as: TAM/TSS, Architects, Development)"
+	aTemplateSections(5) = "Location:"
+	aTemplateEntries(5) = "  (Customer location)"
+	aTemplateSections(6) = "Notes:"
+	aTemplateEntries(6) = "  (General note on the project. Most important to get are the Objectives, Scope, Schedule and Exit Criteria)"
+	aTemplateSections(7) = "Status:"
+	aTemplateEntries(7) = "  (Project Status)"
+	aTemplateSections(8) = "Final Reports or Doc:"
+	aTemplateEntries(8) = "  (Include all final reports, documentation, etc.. )"
+
+	Set rtStyleNorm = session.CreateRichTextStyle
+	Set rtStyleBold = session.CreateRichTextStyle
+
+	rtStyleNorm.Bold = False
+	rtStyleBold.Bold = True
+	rtStyleNorm.FontSize = 9
+	rtStyleBold.FontSize = 9
+
+	' =========================================================================================
+	' Extract the resource name
+	ResName = docDummy.Getitemvalue("ProjKeyValue")(0)
+
+	' Create a new Project document
+	Set doc = dbProj.Createdocument()
+	Call doc.Replaceitemvalue("Form", "Project")
+	Call doc.Computewithform(false, false)
+
+	' Now fill in the default fields from the PATHway status doc.
+	Call doc.Replaceitemvalue("ProjectID", Trim$(Str$(docStatus.Getitemvalue("PWayID")(0))))
+	Call doc.ReplaceItemValue("ProjectStatus", DEFSTATUS)
+	Call doc.Replaceitemvalue("PWayTAM", docStatus.Getitemvalue("PWayTAM")(0))
+	Call doc.ReplaceItemValue("ProjectSubmitter", docStatus.Getitemvalue("PWayAddr")(0))
+	Call doc.Replaceitemvalue("ProjectDesc", docStatus.Getitemvalue("PWayDesc")(0))
+	Call doc.Replaceitemvalue("ProjectCompany", docStatus.Getitemvalue("PWayISV")(0))
+	Call doc.Replaceitemvalue("ProjectCoType", docStatus.Getitemvalue("PWayPartnerType")(0))
+	Call doc.Replaceitemvalue("ProjectStartDate", docStatus.Getitemvalue("PWayNeeded")(0))
+	Call doc.Replaceitemvalue("ProjectDuration", CInt(docStatus.Getitemvalue("PWayDuration")(0)))
+	Call doc.Replaceitemvalue("ProjectDurationIncrement", docStatus.Getitemvalue("PWayDurationType")(0))
+	Call doc.Replaceitemvalue("ProjectType", docStatus.Getitemvalue("PWayHelp")(0))
+	Call doc.Replaceitemvalue("ProjectSOA", "Yes")
+	Call doc.Replaceitemvalue("ProjectResSeq", "01")
+	Call doc.Replaceitemvalue("ProjectResources", ResName)
+	Call doc.Replaceitemvalue("ProjectProducts", docStatus.GetFirstItem("PWayProd"))
+	Call doc.Replaceitemvalue("ProjectPercent", "100")
+	If (docStatus.Getitemvalue("PWayRDeliver")(0) Like "*Fee*") Then
+		Call doc.Replaceitemvalue("ProjectFee", "Fee")
+	Else
+		Call doc.Replaceitemvalue("ProjectFee", "Free")
+	End If
+	If (docStatus.Getitemvalue("PWayDeliver")(0) = "Remote") Then
+		Call doc.Replaceitemvalue("ProjectLocation", "Remote")
+	Else
+		Call doc.Replaceitemvalue("ProjectLocation", "Onsite")
+	End If
+
+	' =========================================================================================
+	' Create the column parameters for the table
+	Set rtStyleP = session.CreateRichTextParagraphStyle
+	rtStyleP.FirstLineLeftMargin = RULER_ONE_INCH
+	rtStyleP.LeftMargin = RULER_ONE_INCH
+
+	Set rtStylesP(1) = session.CreateRichTextParagraphStyle
+	rtStylesP(1).FirstLineLeftMargin = 0
+	rtStylesP(1).LeftMargin = 0
+	rtStylesP(1).RightMargin = RULER_ONE_INCH * 3.5
+	rtStylesP(1).Alignment = ALIGN_LEFT
+
+	Set rtStylesP(2) = session.CreateRichTextParagraphStyle
+	rtStylesP(2).FirstLineLeftMargin = 0
+	rtStylesP(2).LeftMargin = 0
+	rtStylesP(2).RightMargin = RULER_ONE_INCH * 5
+	rtStylesP(2).Alignment = ALIGN_LEFT
+
+	' =========================================================================================
+	' Create a doc link to the PATHway request document
+	If (doc.GetItemValue("ProjectID")(0) <> "" And Not doc.GetItemValue("ProjectID")(0) Like "P#*") Then
+		' first make sure this is not a duplicate
+		Set vw = dbProj.GetView("Project ID Search")
+		key = doc.GetItemValue("ProjectID")(0)
+		Set dc = vw.GetAllDocumentsByKey(key, True)
+		If (dc.Count > 0) Then
+			Set docDummy = dc.GetFirstDocument
+			If (docDummy.NoteID <> doc.NoteID) Then
+				Error 30102, "Project ID " & doc.GetItemValue("ProjectID")(0) & " already exists"
+			End If
+		End If
+
+		' Reference PATHway status doc
+		Set docPath = docStatus
+
+		' create doc link to PATHway document
+		Call doc.Removeitem("ProjectLink")
+		Set rtField = doc.Createrichtextitem("ProjectLink")
+		Call rtField.AppendDocLink(docPATH, "PATHway Request")
+	End If
+
+	' =========================================================================================
+	' if accepting project, load the outline skeleton
+	' first, check the resource assigned and see if they have a special classification
+	Set vw = dbProj.GetView("Project Keywords")
+	keyList(0) = "Resources"
+	ForAll res In doc.GetItemValue("ProjectResources")
+		keyList(1) = res
+		Set docDummy = vw.GetDocumentByKey(keyList, False)
+
+		If (docDummy.HasItem("ResourceClass")) Then
+			ForAll resType In docDummy.GetItemValue("ResourceClass")
+				bFoundClass = True
+
+				' save the type value in a list to remove any duplicates
+				resTypeList(resType) = 1
+			End ForAll
+		End If
+	End ForAll
+
+	' transfer the list to an array so the document can be updated
+	nR = -1
+	ForAll resTag In resTypeList
+		nR = nR + 1
+		ReDim Preserve resTypeArray(nR)
+		resTypeArray(nR) = ListTag(resTag)
+	End ForAll
+
+	Call doc.ReplaceItemValue("ResourceType", resTypeArray)
+
+	' 3/31/2009
+	' set an explicit default value if no special classifications were found
+	If (Len(doc.GetFirstItem("ResourceType").Text) = 0) Then
+		Call doc.ReplaceItemValue("ResourceType", "Default")
+	End If
+
+	' =========================================================================================
+	' Call routine to add the project status fields at the end of the Body field
+	if (doc.HasItem("ProjectTemplate")) Then
+		Call doc.RemoveItem("ProjectTemplate")
+	End If
+	Set rtField = doc.CreateRichTextItem("ProjectTemplate")
+
+	Call rtField.AddNewline(1)
+	For nX = 1 To 8
+		Call rtField.AppendStyle(rtStyleBold)
+		Call rtField.AppendText(aTemplateSections(nX))
+		Call rtField.AppendStyle(rtStyleNorm)
+		Call rtField.AppendText(aTemplateEntries(nX))
+		Call rtField.AddNewline(3)
+	Next
+
+	' Expose the new documentation table
+	Call doc.ReplaceItemValue("ProjectTemplateHide", "open")
+
+	' =========================================================================================
+	' Save the new Project doc and notify the admins
+	Call doc.Save(True, False, True)
+	Call doc.Computewithform(False, False)
+	Call doc.Save(True, False, True)
+
+	If bNotify Then
+		vReply = ws.Prompt(PROMPT_OK, "Project Database Create", "A new Project Database entry was created")
+	End If
+
+	' Notify admin(s) of new project
+	sendList(0) = ADMIN_1
+
+	Set docAdmin = dbProj.CreateDocument
+	Call docAdmin.ReplaceItemValue("Form", "Memo")
+	Call docAdmin.Computewithform(False, False)
+	Call docAdmin.Replaceitemvalue("From", "CN=WebSphere PATHway/OU=Pittsburgh/O=IBM")
+	Call docAdmin.Replaceitemvalue("INetFrom", PathwayMail)
+	Call docAdmin.Replaceitemvalue("ReplyTo", PathwayMail)
+	Call docAdmin.Replaceitemvalue("Principal", PathwayMail)
+	Call docAdmin.ReplaceItemValue("SendTo", ResName)
+	Call docAdmin.ReplaceItemValue("CopyTo", sendList)
+	Call docAdmin.ReplaceItemValue("Subject", "New project opened in WWBP Project Database: " & doc.GetItemValue("ProjectID")(0))
+	Set rtAdmin = docAdmin.CreateRichTextItem("Body")
+	Call rtAdmin.AppendText("PATHway opened new project for " & doc.GetItemValue("ProjectCompany")(0) & ", assigned to " & ResName & ".")
+	Call rtAdmin.Addnewline(2, 1)
+	Call rtAdmin.AppendText("==>  ")
+	Call rtAdmin.Appenddoclink(doc, "", "Link to Project document")
+	Call rtAdmin.Addnewline(2, 1)
+	Call rtAdmin.AppendText(StrLeft$(ResName, " ") & ", follow the link to the new Project document and complete the Project Data section.   ")
+	Call rtAdmin.AppendText("Also, if there are other resources assigned to this request you will need to add them to the Resources Assigned list.")
+	Call docAdmin.Send(False)
+
+	' The PATHway request could have been reopened to change the date or duration.
+	' That will generate a DuplicateID exception.  If that occurs, prompt for permission
+	' to update those fields.  Updates will be made to the document extracted from the
+	' view search.
+Update_Check:
+	If (bRetry) Then
+		Set doc = nothing
+		If (ws.Prompt(PROMPT_YESNO, "WWBP Project Database Error", "Should the Project document be updated with changes?")) Then
+			Call docDummy.Replaceitemvalue("ProjectDuration", CInt(docStatus.Getitemvalue("PWayDuration")(0)))
+			Call docDummy.Replaceitemvalue("ProjectDurationIncrement", docStatus.Getitemvalue("PWayDurationType")(0))
+			Call docDummy.Replaceitemvalue("ProjectStartDate", docStatus.Getitemvalue("PWayNeeded")(0))
+
+			Call docDummy.Save(True, False, True)
+		End If
+	End If
+
+SubExit:
+
+	Exit Sub
+
+SubError:
+
+	If (Err = 30102) Then
+		bRetry = True
+		Resume Update_Check
+	End If
+
+	Print Error & " - " & Err
+
+	Call AddToStackTrace()
+
+End Sub

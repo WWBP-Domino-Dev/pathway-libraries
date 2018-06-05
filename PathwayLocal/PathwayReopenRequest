@@ -1,0 +1,228 @@
+Sub PathwayReopenRequest	(doc As NotesDocument)
+
+	Dim uiDB As NotesUIDatabase
+	Dim docInbox As NotesDocument
+	Dim docStatus As NotesDocument
+	Dim docTemp As NotesDocument
+	Dim collect As NotesDocumentCollection
+	Dim dtOpen As NotesDateTime
+	Dim vw As NotesView
+	Dim vwEntry As NotesViewEntry
+	Dim vwCollect As NotesViewEntryCollection
+
+	Dim lockObj As New DocumentLock
+
+	Dim nZ As Integer
+	Dim nX As Integer
+	Dim nYear As Integer
+	Dim nDays As Integer
+	Dim nStat As Integer
+	Dim nTemp As Long
+
+	Dim errUnid As String
+	Dim search As String
+	Dim sMatch As String
+	Dim sReq As String
+	Dim sYear As String
+	Dim sISV As String
+	Dim sCount As String
+	Dim aKey() As String
+	Dim aFieldDelete(1) As String
+	Dim aDocDelete() As String
+	Dim aCalDelete() As String
+	Dim aYears List As String
+
+	Dim aUnique As Variant
+
+	Dim bHaveMemo As Boolean
+	Dim bUpdateOK As Boolean
+
+	Const WAIT = "Calendar documents left to process: "
+	Const BAD_UNID = 4091
+
+	If (ws Is Nothing) Then
+		Set ws = New NotesUIWorkspace
+	End If
+
+	On Error Goto Sub_Error
+
+	' build the array of Closed fields which need to be removed
+	aFieldDelete(0) = "PWayClosedStatus"
+	aFieldDelete(1) = "PWayClosed"
+
+%REM
+	Redim aFieldDelete for any of these that are reactivated
+	aFieldDelete(13) = "PWayLink"
+	aFieldDelete(2) = "PWayFundAmt"
+	aFieldDelete(3) = "PWayFundCost"
+	aFieldDelete(4) = "PWayFundMgr"
+	aFieldDelete(5) = "PWayResFunding"
+	aFieldDelete(6) = "PWayTL"
+	aFieldDelete(7) = "PWayCountD"
+	aFieldDelete(8) = "PWayCountH"
+	aFieldDelete(9) = "PWayBaseCost"
+	aFieldDelete(10) = "PWayCalcBase"
+	aFieldDelete(11) = "PWayCalcCost"
+	aFieldDelete(12) = "PWayCalcWeeks"
+	aFieldDelete(14) = "PWayClosedDate"
+	aFieldDelete(15) = "PWayClosedDeliver"
+	aFieldDelete(16) = "PWayCostAmt"
+	aFieldDelete(17) = "PWayCurrStat"
+	aFieldDelete(18) = "PWayDuration2"
+	aFieldDelete(19) = "PWayDuration3"
+	aFieldDelete(20) = "PWayDurationType2"
+	aFieldDelete(21) = "PWayDurationType3"
+	aFieldDelete(22) = "PWayEmerging"
+	aFieldDelete(23) = "PWayProfitAmt"
+	aFieldDelete(24) = "PWayProfitPct"
+	aFieldDelete(25) = "PWayResAddr"
+	aFieldDelete(26) = "PWayResAddr2"
+	aFieldDelete(27) = "PWayResAddr3"
+	aFieldDelete(28) = "PWayResDuration"
+	aFieldDelete(29) = "PWayResFunding"
+	aFieldDelete(30) = "PWayResName"
+	aFieldDelete(31) = "PWayResName2"
+	aFieldDelete(32) = "PWayResName3"
+	aFieldDelete(33) = "PWayResProvider"
+	aFieldDelete(34) = "PWayResProvider2"
+	aFieldDelete(35) = "PWayResProvider3"
+	aFieldDelete(36) = "PWayRevAmt"
+	aFieldDelete(37) = "PWayRenSource"
+	aFieldDelete(38) = "PWayTL"
+	aFieldDelete(39) = "PWayUtilize"
+	aFieldDelete(40) = "PWayUtilize2"
+	aFieldDelete(41) = "PWayUtilize3"
+%END REM
+
+	If (doc.HasItem(f_PWDATES)) Then
+		Error ERR_BAD_SOURCE, MSG_BAD_SOURCE
+	End If
+
+	' call lock routine
+	Call lockObj.lockDocuments(doc)
+	If (doc.Form(0) = "Memo" Or doc.Form(0) = "Reply") Then
+		Set docInbox = lockObj.inboxDoc
+		Set docStatus = lockObj.statusDoc
+		bHaveMemo = True
+	Else
+		Set docStatus = lockObj.inboxDoc
+	End If
+
+	' remove all of the supplemental status documents.
+	Set dtOpen = docStatus.GetFirstItem(f_PWOPENDT).DateTimeValue
+	nYear = Year(dtOpen.LSLocalTime)
+
+	' get request id for search argument
+	sReq = docStatus.GetFirstItem(f_PWID).Text
+
+	' save the UNID of each document to be deleted so that it
+	' can be deleted later
+	Redim aDocDelete(0)
+
+	nStat = 0
+
+	' get all matching status documents
+	Set vw = db.GetView(v_SEARCH)
+	Call vw.Refresh
+	Set collect = vw.GetAllDocumentsByKey(Cint(sReq),True)
+
+	If (collect.Count > 0) Then
+		nX = -1
+		Set docTemp = collect.GetFirstDocument
+		Do Until docTemp Is Nothing
+			' the supplemental status documents are identified by a special field
+			If (docTemp.HasItem(f_PWDATES)) Then
+				' keep track of the year(s) spanned by the request so the correct MRA documents can be identified
+				sYear = Strleft(docTemp.GetItemValue(f_PWDATES)(0), "/")
+				aYears(sYear) = 1
+
+				nX = nX + 1
+				Redim Preserve aDocDelete(nX)
+				aDocDelete(nX) = docTemp.UniversalID
+
+				nStat = nStat + 1
+			End If
+			Set docTemp = collect.GetNextDocument(docTemp)
+		Loop
+	End If
+
+	' compress the array of documents to be deleted
+	nX = Ubound(aDocDelete)
+	aUnique = Arrayunique(aDocDelete, 0)
+
+	' remove additional fields in the status document created at Close time
+	Forall fDel In aFieldDelete
+		Call docStatus.RemoveItem(fDel)
+	End Forall
+
+	' revert fields which stay
+	Call docStatus.ReplaceItemValue(f_PWCLOSE, "")
+	Call docStatus.ReplaceItemValue(f_PWSTAT, "ReOpen")
+
+	' try to get the utilization factor into the correct format
+	If (docStatus.HasItem("PWayUtilize")) Then
+		If (docStatus.GetFirstItem("PWayUtilize").Text <> "") Then
+			' first make sure it's numeric.  if not, substitute default value of 100.  if it is, convert existing value to Long
+			If (Isnumeric(docStatus.GetFirstItem("PWayUtilize").Text)) Then
+				nTemp = Clng(docStatus.GetFirstItem("PWayUtilize").Text)
+			Else
+				nTemp = 100
+			End If
+			' if value is less that the lowest option, substitute default value of 100.  else convert Long to Int
+			If (nTemp < 10) Then
+				nZ = 100
+			Else
+				nZ = Cint(nTemp)
+			End If
+			' convert the new value to text, which is the format of the dialog list
+			Call docStatus.ReplaceItemValue("PWayUtilize", Str(nZ))
+		End If
+	End If
+
+	' add to support editing routine
+	Call docStatus.ReplaceItemValue("SaveOptions", "0")
+
+	' all updates are done.  attempt to save the status document.  if successful, finalize the other pending document updates
+	If (docStatus.Save(True, False, True)) Then
+		bUpdateOK = True
+
+		' delete the supplemental status and calendar documents
+		Forall sUNID In aUnique
+			Set docTemp = db.GetDocumentByUNID(sUNID)
+			Call docTemp.Remove(True)
+Next_Unique:
+		End Forall
+
+		Msgbox "Deleted " & nStat & " status documents", 48, "reopen"
+	End If
+
+Sub_Exit:
+	' release the locks
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.releaseDocuments(False)
+	End If
+
+	' if process completed normally, a couple of more tasks to do
+	If (bUpdateOK) Then
+		' if running on a local replica, try to replicate to pick up the new documents
+		If (db.Server = "" And foundServer) Then
+			db.Replicate(serverName)
+		End If
+		Call ws.ViewRefresh
+	End If
+
+	Exit Sub
+
+Sub_Error:
+	If (Err = BAD_UNID) Then
+		Resume Next_Unique
+	End If
+
+	' release the locks
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.releaseDocuments(False)
+	End If
+
+	Call AddToStackTrace()
+
+End Sub

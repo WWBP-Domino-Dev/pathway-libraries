@@ -1,0 +1,94 @@
+Function PathwayReqValue(doc As NotesDocument, days As Double, hours As Integer, rate As Double) As Long
+
+%REM
+
+Name:
+	PathwayReqValue
+
+Arguments:
+	doc		current status document
+	days	base number of days in the request
+	hours	base number of hours in the request
+	rate	hourly rate, either the default rate from the global profile or a custom rate specified in the request
+
+Called By:
+	PathwayCloseRequest
+	PathwayBatchProcessor
+
+Description:
+	Calculate the value of the request = (hours * rate-per-hour) * utilization percentage
+		baseValue = (days-in-the-request * 8 * rate) * utilization-ratio
+		addValue1 = (days-provider-1 * 8 * rate) * utilization-ratio-1
+		addValue2 = (days-provider-2 * 8 * rate) * utilization-ratio-2
+		total = baseValue + addValue1 + addValue2
+
+	Providing an input rate value of 1 will return the total number of billable hours for this request.
+%END REM
+
+	Dim dtTemp As NotesDateTime
+	Dim nFunding As Long
+	Dim nPartial As Double
+	Dim nDaysPartial As Integer
+	Dim m_days As Double
+	Dim m_hours As Integer
+	Dim testFactor As Variant
+
+	On Error Goto Func_Error
+
+	' first get the main request value.  convert hours to days and add to total
+	m_days = days
+	m_hours = hours
+	Call pwayLog.LogAction("  PathwayReqValue( ): Base days = " & Cstr(m_days) & ", base hours = " & Cstr(m_hours) & " at rate " & rate & "/hour")
+
+	' sum days and hours for funding calculation
+	m_days = m_days + (m_hours / 8)
+	Call pwayLog.LogAction("  PathwayReqValue( ):   Combined (days + hours) value = " & Cstr(m_days))
+
+	' first make sure this value is numeric.
+	If (Not Isnumeric(doc.GetItemValue("PWayUtilize")(0))) Then
+		Error 30180, "The primary utilization value is invalid"
+	End If
+
+	' convert ratio value to percentage and calculate base funding amount
+	nPartial = doc.GetItemValue("PWayUtilize")(0) * 0.01
+	nFunding = ((rate * 8) * m_days) * nPartial
+	Call pwayLog.LogAction("  PathwayReqValue( ):   Base ratio: " & Cstr(nPartial) & ", so base funding = " & Cstr(nFunding))
+
+	' if there was a 2nd additional provider, calculate their contribution
+	If (doc.HasItem("PWayResProvider2")) Then
+		If (doc.GetFirstItem("PWayResProvider2").Text <> "") Then
+			Set dtTemp = doc.GetFirstItem(f_PWDATE).DateTimeValue
+
+			Call pwayLog.LogAction("  PathwayReqValue( ):   Get funded days for the second provider")
+
+			nDaysPartial = PathwayCalcDuration(doc.GetItemValue("PWayDuration2")(0), doc.GetItemValue("PWayDurationType2")(0), dtTemp)
+
+			nPartial = doc.GetItemValue("PWayUtilize2")(0) * 0.01
+			nFunding = nFunding + ((rate * nDaysPartial * 8) * nPartial)
+			Call pwayLog.LogAction("  PathwayReqValue( ):   Provider 2 ratio: " & Cstr(nPartial) & ". funding now = " & Cstr(nFunding))
+		End If
+	End If
+
+	' if there was a 3rd additional provider, calculate their contribution
+	If (doc.HasItem("PWayResProvider3")) Then
+		If (doc.GetFirstItem("PWayResProvider3").Text <> "") Then
+			Set dtTemp = doc.GetFirstItem(f_PWDATE).DateTimeValue
+			nDaysPartial = PathwayCalcDuration(doc.GetItemValue("PWayDuration3")(0), doc.GetItemValue("PWayDurationType3")(0), dtTemp)
+
+			Call pwayLog.LogAction("  PathwayReqValue( ):   Get funded days for the third provider")
+
+			nPartial = doc.GetItemValue("PWayUtilize3")(0) * 0.01
+			nFunding = nFunding + ((rate * nDaysPartial * 8) * nPartial)
+			Call pwayLog.LogAction("  PathwayReqValue( ):   Provider 3 ratio: " & Cstr(nPartial) & ". funding now = " & Cstr(nFunding))
+		End If
+	End If
+
+	PathwayReqValue = nFunding
+
+Func_Exit:
+	Exit Function
+
+Func_Error:
+	Call AddToStackTrace()
+
+End Function

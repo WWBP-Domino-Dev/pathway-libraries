@@ -1,0 +1,47 @@
+Sub PathwayViewRequest (doc As NotesDocument)
+
+%REM
+Name:
+	PathwayViewRequest
+
+Arguments:
+	doc		selected Memo or Reply document from the Inbox
+
+Called By:
+	Action Menu selection
+
+Description:
+	Open the status document associated with the selected document.  The status document is located from
+	various criteria outlined in the PathwayFindRR function.
+
+History:
+
+%END REM
+
+	Dim docWS As NotesUIDocument
+	Dim docRequest As NotesDocument
+
+	Dim sUnid As String
+
+	If (ws Is Nothing) Then
+		Set ws = New NotesUIWorkspace
+	End If
+
+  ' ================== M A I N =========================
+
+	On Error Goto Sub_Error
+
+	' locate the status document with its UniversalID and then show it to the user
+	sUnid = PathwayFindRR(doc)
+	Set docRequest = db.GetDocumentByUNID(sUnid)
+
+	Set docWS = ws.EditDocument(True, docRequest)
+	Call docWS.Reload
+
+Sub_Exit:
+	Exit Sub
+
+Sub_Error:
+	Call AddToStackTrace()
+
+End Sub

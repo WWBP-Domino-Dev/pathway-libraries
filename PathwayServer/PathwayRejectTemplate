@@ -1,0 +1,44 @@
+Sub PathwayRejectTemplate (ReplyTo As String)
+
+%REM
+SUMMARY:
+	If the TAM submits a template which does not match the current version,
+	send a reply noting that fact.   Then send a copy of the current template with
+	the standard set of instructions.
+
+HISTORY:
+	6/21/2004:	created by g.owen
+
+%END REM
+
+	Dim rtBody As NotesRichTextItem
+	Dim x As Integer
+
+	' build the array of notification text
+	Call PathwayRejectionText
+
+	' create temporary document to send
+	Set doc = db.CreateDocument
+	doc.Form = "Memo"
+	Call doc.ComputeWithForm(False, False)
+	Call doc.ReplaceItemValue("SendTo", ReplyTo)
+	Call doc.ReplaceItemValue("Subject", "New PATHway template is available")
+	Set rtBody = doc.CreateRichTextItem("Body")
+	For x = 0 To Ubound(templateWarning)
+		Call rtBody.AppendText(templateWarning(x))
+	Next
+	Call doc.Send(False)
+
+	' send copy of current template
+	Set doc = db.CreateDocument
+	doc.Form = "Pathway Request Template"
+	Call doc.ReplaceItemValue("HideFromTAM", HideSet)
+	Call doc.ReplaceItemValue("HideFromPATHway", HideReset)
+	Call doc.ReplaceItemValue("Notify", "PATHway template v" & TVERSION)
+	Call doc.ComputeWithForm(False, False)
+	Call doc.ReplaceItemValue("SaveOptions", "0")
+	Call doc.ReplaceItemValue("Subject", "PATHway Request Template")
+	Call doc.ReplaceItemValue("SendTo", ReplyTo)
+	Call doc.Send(True)
+
+End Sub

@@ -1,0 +1,439 @@
+%REM
+	Sub PathwayBatchDuplicator
+	Description: Comments for Sub
+
+		Some enablement activities involve a large number of partners.  This requires a separate PATHway for
+		each partner.   This can be done manually if the PATHway request includes them all, but duplicating
+		a reference request manually is a tedious and inefficient task.
+
+		Input:	1. existing PATHway document
+				2. text document with list of partner names
+%END REM
+Sub PathwayBatchDuplicator (source As NotesDocument)
+
+	Dim doc As NotesDocument
+	Dim docOld As NotesDocument
+	Dim docShow As NotesDocument
+	Dim docProfile As NotesDocument
+	Dim docUI As NotesUIDocument
+	Dim docCopies() As NotesDocument
+	Dim pwayLog As NotesLog
+	Dim collect As NotesDocumentCollection
+	Dim item As NotesItem
+	Dim vw As NotesView
+	Dim rtInput As NotesRichTextItem
+	Dim rtText As NotesRichTextItem
+	Dim dtPosted As NotesDateTime
+
+	Dim sReq As String
+	Dim sUnid As String
+	Dim sFolder As String
+	Dim sSubject As String
+	Dim sLineStatus As String
+	Dim sLine As String
+	Dim search As String
+	Dim testChr As String
+
+	Dim fileSelect As Variant
+
+	Dim cpyIndex As Integer
+	Dim fldIndex As Integer
+	Dim counter As Integer
+	Dim nTest As Integer
+	Dim nReq As Integer
+	Dim nCount As Integer
+	Dim vReply As Variant
+
+	Dim aCopy(36) As String
+	Dim aCloseCopy(81) As String
+	Dim lockObj As New DocumentLock
+
+	Const PWFORM = "PWayData"
+	Const ERRNOTOPENED = 30920
+	Const ERREMPTY = 30921
+
+	aCopy(0) = "PWaySponsorOrg"
+	aCopy(1) = "PWayCloudRecurRev"
+	aCopy(2) = "PWayPriority"
+	aCopy(3) = "PWayDeliver"
+	aCopy(4) = "PWayHelp"
+	aCopy(5) = "PWayTAM"
+	aCopy(6) = "PWayAddress"
+	aCopy(7) = "PWayNeeded"
+	aCopy(8) = "PWayEndNeeded"
+	aCopy(9) = "PWayDuration"
+	aCopy(10) = "PWayDurationType"
+	aCopy(11) = "PWayContact"
+	aCopy(12) = "PWayContactNbr"
+	aCopy(13) = "PWayJustify"
+	aCopy(14) = "PWayPartnerType"
+	aCopy(15) = "PWayRevTotal"
+	aCopy(16) = "PWayWebSphereRevPortion"
+	aCopy(17) = "PWayDesc"
+	aCopy(18) = "PWaySponsor"
+	aCopy(19) = "PWayStatus"
+	aCopy(20) = "PWayCountry"
+	aCopy(21) = "PWayGEO"
+	aCopy(22) = "PWayRevQtr"
+	aCopy(23) = "PWayrevJustify"
+	aCopy(24) = "PWayCloudRecurFirstYear"
+	aCopy(25) = "PWayRevAslOem"
+	aCopy(26) = "PWayRevAslOemJustify"
+	aCopy(27) = "PWayRDeliver"
+	aCopy(28) = "PWaySkills"
+	aCopy(29) = "PWayGA"
+	aCopy(30) = "PWayCompete"
+	aCopy(31) = "PWaySiebelNum"
+	aCopy(32) = "PWayCEID"
+	aCopy(33) = "PWaySalesConnectCustomer"
+	aCopy(34) = "PWayEngPhase"
+	aCopy(35) = "PWaySkillsPerson"
+	aCopy(36) = "PWayPractEngaged"
+
+	aCloseCopy(0) = "Principal"
+	aCloseCopy(1) = "PWayAddr"
+	aCloseCopy(2) = "PWayBaseCost"
+	aCloseCopy(3) = "PWayCalcBase"
+	aCloseCopy(4) = "PWayCalcCost"
+	aCloseCopy(5) = "PWayCalcWeeks"
+	aCloseCopy(6) = "PWayCEID"
+	aCloseCopy(7) = "PWayClosed"
+	aCloseCopy(8) = "PWayClosedDate"
+	aCloseCopy(9) = "PWayClosedStatus"
+	aCloseCopy(10) = "PWayCompete"
+	aCloseCopy(11) = "PWayContactAddr"
+	aCloseCopy(12) = "PWayCostAmt"
+	aCloseCopy(13) = "PWayCountD"
+	aCloseCopy(14) = "PWayCountH"
+	aCloseCopy(15) = "PWayCountry"
+	aCloseCopy(16) = "PWayCurrStat"
+	aCloseCopy(17) = "PWayDuration2"
+	aCloseCopy(18) = "PWayDuration3"
+	aCloseCopy(19) = "PWayDurationType2"
+	aCloseCopy(20) = "PWayDurationType3"
+	aCloseCopy(21) = "PWayDurationTypeD"
+	aCloseCopy(22) = "PWayEngDate"
+	aCloseCopy(23) = "PWayEngPhase"
+	aCloseCopy(24) = "PWayEstCostAmt"
+	aCloseCopy(25) = "PWayFundAmt"
+	aCloseCopy(26) = "PWayFundCost"
+	aCloseCopy(27) = "PWayFundMgr"
+	aCloseCopy(28) = "PWayGA"
+	aCloseCopy(29) = "PWayGEO"
+	aCloseCopy(30) = "PWayHaveMaterialsQuery"
+	aCloseCopy(31) = "PWayHelpOther"
+	aCloseCopy(32) = "PWayIsvProd"
+	aCloseCopy(33) = "PWayLink"
+	aCloseCopy(34) = "PWayLock"
+	aCloseCopy(35) = "PWayLockDate"
+	aCloseCopy(36) = "PWayMaterialsDesc"
+	aCloseCopy(37) = "PWayNewISV"
+	aCloseCopy(38) = "PWayOpen"
+	aCloseCopy(39) = "PWayOpenDate"
+	aCloseCopy(40) = "PWayOtherInfo"
+	aCloseCopy(41) = "PWayPassword"
+	aCloseCopy(42) = "PWayPractEngaged"
+	aCloseCopy(43) = "PWayProd"
+	aCloseCopy(44) = "PWayProfitAmt"
+	aCloseCopy(45) = "PWayProfitPct"
+	aCloseCopy(46) = "PWayProgramSpend"
+	aCloseCopy(47) = "PWayRate"
+	aCloseCopy(48) = "PWayRDeliver"
+	aCloseCopy(49) = "PWayReqPhone1"
+	aCloseCopy(50) = "PWayReqPhone2"
+	aCloseCopy(51) = "PWayReqTxt"
+	aCloseCopy(52) = "PWayResAddr"
+	aCloseCopy(53) = "PWayResAddr2"
+	aCloseCopy(54) = "PWayResAddr3"
+	aCloseCopy(55) = "PWayResDuration"
+	aCloseCopy(56) = "PWayResFunding"
+	aCloseCopy(57) = "PWayResName"
+	aCloseCopy(58) = "PWayResName2"
+	aCloseCopy(59) = "PWayResName3"
+	aCloseCopy(60) = "PWayResProvider"
+	aCloseCopy(61) = "PWayResProvider2"
+	aCloseCopy(62) = "PWayResProvider3"
+	aCloseCopy(63) = "PWayRevAmt"
+	aCloseCopy(64) = "PWayRevAslOem"
+	aCloseCopy(65) = "PWayRevAslOemJustify"
+	aCloseCopy(66) = "PWayRevenue"
+	aCloseCopy(67) = "PWayRevJustify"
+	aCloseCopy(68) = "PWayRevQtr"
+	aCloseCopy(69) = "PWayRevSource"
+	aCloseCopy(70) = "PWaySiebelNum"
+	aCloseCopy(71) = "PWaySkills"
+	aCloseCopy(72) = "PWaySkillsPerson"
+	aCloseCopy(73) = "PWayStatus"
+	aCloseCopy(74) = "PWayStatusLog"
+	aCloseCopy(75) = "PWayTamReason"
+	aCloseCopy(76) = "PWayTempLog"
+	aCloseCopy(77) = "PWayTL"
+	aCloseCopy(78) = "PWayUtilize"
+	aCloseCopy(79) = "PWayUtilize2"
+	aCloseCopy(80) = "PWayUtilize3"
+	aCloseCopy(81) = "PWayValidateSwitch"
+
+	On Error GoTo Sub_Error
+
+	Stop
+
+	sReq = CStr(source.Getitemvalue("PWayID")(0))
+
+	' look for that request in the db
+	search = |Form = "| & PWFORM & |" & PWayID = @Integer(| & sReq & |)|
+
+	' search for matching documents in the Pathway Status Search view
+	Print "Find all matching request documents"
+	Set collect = db.Search(search, Nothing, 0)
+	If (collect.Count = 0) Then
+		Error ERR_RR_NOT_IN_DB, MSG_RR_NOT_IN_DB & sReq
+	End If
+
+	' prompt for location of input file
+	fileSelect = ws.OpenFileDialog(False, "PATHway Request Duplicator")
+	If (IsEmpty(fileSelect)) Then
+		Exit Sub
+	End If
+
+	Set csvStream = session.CreateStream
+
+	If Not (csvStream.Open(fileSelect(0), "ASCII")) Then
+		Error ERRNOTOPENED, "Input file could not be opened"
+	End If
+	If csvStream.Bytes = 0 Then
+		Error ERREMPTY, "Input file is apparently empty"
+	End If
+
+	' Define text for automated response to request creation
+	aReqResp("Line1a") = "This is a confirmation that IBM Cloud PATHway has recently received your Resource Request.  The Request ID is "
+	aReqResp("Line1b") = " and it is currently under review.  Once approved, PATHway will assign the appropriate resource. " & NEWLINE & NEWLINE & _
+	"Please verify the accuracy of the information you have submitted.  It is imperative we have accurate and complete information to ensure deployment of appropriate resources.   " & _
+	"If you have any concerns or would like to raise the focus/priority on this request please email " & _
+	"IBM Cloud PATHway (" & PathwayInternetMail & ") " & _
+	"using the latest copy you have of your request thread, or contact Debra Nurkin/Piscataway/IBM (720-396-7197, Mobile: 908-812-1627) "
+	aReqResp("LineStatus1") = {For the current summary of the request refer to this URL:} & NEWLINE
+	aReqResp("LineStatus2") = "    http://" & ProdHost & ProdPath & ProdFile & "/PWStatus?ReadForm&PWayReq="
+
+	Set pwayLog = New NotesLog("PATHway Batch Duplicator Log")
+	Call pwayLog.OpenFileLog(debugFile)
+	Call pwayLog.LogAction("PathwayBatchDuplicator()")
+
+	ReDim docCopies(10)
+
+	' date for reply doc
+	Set dtPosted = source.Getitemvaluedatetimearray("PostedDate")(0)
+
+	Set docShow = dbServer.CreateDocument
+	Call docShow.AppendItemValue("Form", f_REPLY)
+	Call docShow.ReplaceItemValue("PostedDate", dtPosted)
+	Set rtInput = docShow.CreateRichTextItem(f_BODY)
+
+	' Build the fixed reply text in the Reply document
+	Call rtInput.AppendStyle(rsNormal)
+	Call rtInput.AppendText(aReqResp("Line1a") & nReq & aReqResp("Line1b"))
+	Call rtInput.AddNewLine(2)
+	Call rtInput.AppendText(aReqResp("LineStatus1"))
+
+	' found request, get ready to create.
+	' lock profile doc to create new request id
+	Set vw = dbServer.GetView(v_PROFILE)
+	If (vw.EntryCount > 0) Then
+		Set docProfile = vw.GetFirstDocument
+	Else
+		Error ERR_PROFILE_MISSING, MSG_PROFILE_MISSING
+	End If
+
+	' lock it from other users
+	Print "Lock the profile"
+	Call lockObj.lockDocuments(docProfile)
+
+	' generate next id in sequence
+	nReq = docProfile.GetFirstItem(f_CNTR).Text
+	nTest = nReq + 1
+
+	' make sure the new number is unique
+	Set vw = dbServer.GetView(v_SEARCH)
+	Set doc = vw.GetDocumentByKey(CStr(nTest), True)
+	If Not (doc Is Nothing) Then
+		Error ERR_RR_DUPLICATE, MSG_RR_DUPLICATE & CStr(nTest)
+	End If
+
+	cpyIndex = 0
+
+	' Create a copy for each partner in the input file
+	Do
+		sLine = csvStream.ReadText(STMREAD_LINE, EOL_ANY)
+
+		' Remove line feed(s)
+		For counter = 1 To 2
+			testChr = Right$(sLine, 1)
+			Select Case testChr
+				Case Chr(10), Chr(13)
+				sLine = Left$(sLine, Len(sLine) - 1)
+			End Select
+		Next
+
+		' make sure there's something to look at
+		If (Len(sLine) = 0) Then
+			GoTo NextRow
+		End If
+
+		Call pwayLog.LogAction("Starting row for partner " & sLine)
+
+		' load the matching status doc
+		Set docOld = collect.GetFirstDocument
+
+		' increment request number for this partner
+		nReq = nReq + 1
+		nCount = 0
+
+		Do Until docOld Is Nothing
+
+			' create new status doc, load selected fields
+			Print "Create new status doc for " & Str(nReq)
+			Set doc = dbServer.CreateDocument
+			Call doc.AppendItemValue("Form", f_DATA)
+			Call doc.ReplaceItemValue("Subject", "Status Document for RR " & nReq)
+			Call doc.ReplaceItemValue("SaveOptions", "0")
+			Call doc.ReplaceItemValue(f_PWID, nReq)
+			Call doc.Replaceitemvalue("PWayISV", sLine)
+			Call doc.ReplaceItemValue("PostedDate", dtPosted)
+			Call doc.ReplaceItemValue(f_PWUPD, dtPosted)
+			Call doc.AppendItemValue(f_PWOPENDT, dtPosted)
+
+			Call doc.AppendItemValue("ProtectFromArchive", "1")
+			Call doc.AppendItemValue("$NoPurge", "1")
+
+			Print "Start copying default set of fields"
+
+			' copy default items
+			For fldIndex = 0 To UBound(aCopy)
+				If (docOld.Hasitem(aCopy(fldIndex))) Then
+					Call doc.CopyItem(docOld.GetFirstItem(aCopy(fldIndex)), aCopy(fldIndex))
+					Call pwayLog.LogAction("Default copy: " & aCopy(fldIndex) & " = " & docOld.GetFirstItem(aCopy(fldIndex)).Text)
+				Else
+					Print "field " & aCopy(fldIndex) & " not found"
+				End If
+			Next
+
+			Print "Start copying additional set of fields for closed requests"
+
+			' optionally copy selected items for closed requests.
+			' closed requests have additional fields generated by the Close process
+			If (collect.Count > 1) Then
+				For fldIndex = 0 To UBound(aCloseCopy)
+					If (docOld.Hasitem(aCloseCopy(fldIndex))) Then
+						Call doc.CopyItem(docOld.GetFirstItem(aCloseCopy(fldIndex)), aCloseCopy(fldIndex))
+						Call pwayLog.LogAction("Closed copy: " & aCloseCopy(fldIndex) & " = " & docOld.GetFirstItem(aCloseCopy(fldIndex)).Text)
+					End If
+				Next
+			End If
+
+			nCount = nCount + 1
+			Print "Run form refresh on document " & CStr(nCount) & " for " & sLine
+			Call doc.ComputeWithForm(False, False)
+
+			' add the new request doc to the queue
+			If (cpyIndex = UBound(docCopies)) Then
+				ReDim Preserve docCopies(UBound(docCopies) + 10)
+			End If
+
+			Set docCopies(cpyIndex) = doc
+			cpyIndex = cpyIndex + 1
+
+			' only update the Subject if this is the first pass
+			If (Len(sSubject) = 0) Then
+				' process Reply doc fields SendTo and Subject
+				Call docShow.ReplaceItemValue("SendTo", docOld.GetFirstItem(f_PWADDR).Text)
+
+				sSubject = "RR [" & nReq & "]"
+				sSubject = sSubject & " | " & _
+				docOld.GetFirstItem(f_PWSTAT).Text & " | " & _
+				docOld.GetFirstItem(f_PWDATE).Text & ", " & _
+				docOld.GetFirstItem(f_PWISV).Text & ", " & _
+				docOld.GetFirstItem(f_PWDUR).Text & _
+				docOld.GetFirstItem(f_PWDURTYP).Text & ", " & _
+				docOld.GetFirstItem(f_PWDLV).Text & ", " & _
+				docOld.GetFirstItem(f_PWHELP).Text & " | " & _
+				docOld.GetFirstItem(f_PWTAM).Text & ", " & _
+				docOld.GetFirstItem(f_PWPRI).Text
+
+				sLineStatus = aReqResp("LineStatus2") & nReq
+			Else
+				sLineStatus = sLineStatus & NEWLINE & aReqResp("LineStatus2") & nReq
+			End If
+
+			Set docOld = collect.GetNextDocument(docOld)
+		Loop
+
+NextRow:
+	Loop Until csvStream.IsEOS
+
+	' Remove any extra array entries
+	cpyIndex = cpyIndex - 1
+	ReDim Preserve docCopies(cpyIndex)
+
+	' Finish reply email text
+	Call rtInput.AppendText(sLineStatus)
+	Call rtInput.AddNewLine(2)
+	Call rtInput.AppendText(sDBsignature)
+
+	Call docShow.ReplaceItemValue("Subject", sSubject)
+
+	' update profile doc with new id.  if the save fails, don't save new request doc
+	Print "Update profile and finish..."
+	Call docProfile.ReplaceItemValue(f_CNTR, nReq)
+	If (docProfile.Save(True, False)) Then
+
+		Print "Start saving pending request documents"
+		' if profile doc saved, save the new status doc(s)
+		ForAll docSaved In docCopies
+			Call docSaved.Save(True, False)
+
+			sFolder = v_TAMFOLDER & docSaved.GetFirstItem(f_PWTAM).Text
+			Call docSaved.PutInFolder(sFolder)
+		End ForAll
+
+		' and then save the Reply doc
+		Set doc = docCopies(1)
+		sUnid = doc.UniversalID
+		Call docShow.ReplaceItemValue(f_PWUNID, sUnid)
+		Call docShow.ComputeWithForm(False, False)
+		Call docShow.Save(True, False)
+
+		Call docShow.PutInFolder("($Inbox)")
+	End If
+
+Sub_Exit:
+	' release the lock on the global profile document
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.releaseDocuments(False)
+	End If
+
+	If (db.Server = "" And foundServer) Then
+		db.Replicate(serverName)
+	End If
+
+	Set ws = New NotesUIWorkspace
+
+	' open the Reply document for editing if there is one
+	sUnid = docShow.UniversalID
+	Set docShow = db.GetDocumentByUnid(sUnid)
+	Set docUI = ws.EditDocument(False, docShow)
+
+	Call ws.ViewRefresh
+
+	Exit Sub
+
+Sub_Error:
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.releaseDocuments(False)
+		Set lockObj = Nothing
+	End If
+
+	Call AddToStackTrace()
+
+	Stop
+
+
+End Sub

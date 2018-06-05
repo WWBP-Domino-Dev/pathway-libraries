@@ -1,0 +1,6 @@
+Dim docNotify As NotesDocument
+Dim collRR As NotesDocumentCollection
+
+Dim nRR As Integer
+Const newLine = {
+}

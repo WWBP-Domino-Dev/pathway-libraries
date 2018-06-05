@@ -1,0 +1,446 @@
+
+' C L A S S     D O C U M E N T L O C K ============================
+Public Class DocumentLock
+
+%REM
+	|
+Class provides a method for serializing updates to Memo/Status document pairs.
+Updates could be made by users in multiple replicas and by BeforeMailArrives
+agent running on the server.
+
+Class variables:
+	m_dbObject		maintains a copy of the database reference so that document objects
+							passed back to caller will be persistent
+	m_InboxBackup	copy of the source document after the initial lock state is set.  used in the
+							PathwayCloseRequest routine, if errors occur after the user has initiated
+							the close process and modified the document., to restore the document
+							to its pre-modified state.
+	m_StatusBackup	see m_InboxBackup
+	m_lockParms		holds document objects and associated attributes
+	m_onServer		identifies the source of the input document.  local replica access will cause a
+							retrieval of the selected document from the server.
+	m_isAgent			indicates whether the code is executed by server agent or user action
+%END REM
+
+	m_dbObject As NotesDatabase
+	m_InboxBackup As NotesDocument
+	m_StatusBackup As NotesDocument
+	m_lockParms As lockParms
+	m_onServer As Boolean
+	m_isAgent As Boolean
+
+%REM
+	|
+	|
+	|
+SUMMARY:
+	Name:	new
+	Input:		current document
+	Output:	none
+
+ 	Build new DocumentLock class object.
+	Make sure the database object points to the server.
+	Set flag to show it's an agent or user execution.
+	Set the owner's name.
+
+%END REM
+
+	Sub new ()
+
+		If (db.Server = "" And Not bDebug) Then
+			' database in use is local replica, so switch to server copy
+			Set m_dbObject = dbServer
+			m_onServer = False
+		Else
+			Set m_dbObject = db
+			m_onServer = True
+		End If
+
+		' set the owner of the lock
+		If (session.IsOnServer) Then
+			m_lockParms.LockOwner = session.CurrentAgent.Name
+			m_isAgent = True
+		Else
+			m_lockParms.LockOwner = session.CommonUserName
+			m_isAgent = False
+		End If
+
+		' initialize object variables
+		Set m_lockParms.InboxDoc = Nothing
+		Set m_lockParms.StatusDoc = Nothing
+
+Sub_Exit:
+		Exit Sub
+
+Sub_Error:
+		Call AddToStackTrace()
+
+	End Sub
+
+%REM
+	|
+SUMMARY:
+	Name:	lockDocuments
+	Input:	document object
+	Output:	n/a
+
+	First check to see if the incoming document is locked.
+	If a server agent is running, exit with an error
+	If a user is running, ask if lock should be overridden.
+	Lock the input document.
+	If the input document is an email doc, then do the following, otherwise just exit:
+		Using the Subject field or the Body field if necessary, extract a request number
+		Call PathwayFindRR to return the UNID of the matching status document
+		Check to see if the status document is locked.
+		If it is, follow same procedures as for Inbox document.
+		Lock the status document
+
+HISTORY:
+
+%END REM
+	Sub lockDocuments (docProcess As NotesDocument)
+
+		Dim vwStat As NotesView
+		Dim collStat As NotesDocumentCollection
+		Dim docStatus As NotesDocument
+		Dim dateLock As NotesDateTime
+		Dim dateHeld As NotesDateTime
+
+		Dim sReq As String
+		Dim sDocSubj As String
+		Dim sWhere As String
+		Dim sWhoHeld As String
+		Dim sTextTitle As String
+		Dim sTextPrompt As String
+
+		Dim nLoop As Integer
+
+		Dim vReply As Variant
+
+		On Error Goto lockDocuments_Error
+
+		' make sure we've connected to the server copy of the database.
+		' if not, locking can't be synchronized.
+		If (m_dbObject Is Nothing) Then
+			Error ERR_NO_SERVER, MSG_NO_SERVER
+		End If
+
+		m_lockParms.InboxUNID = docProcess.UniversalID
+
+		sTextTitle = "Document lock"
+		sTextPrompt = " document has been locked by "
+
+		Stop
+
+		' retrieve Inbox document from server and save copy for release subroutine
+		If (m_onServer) Then
+			Set m_lockParms.InboxDoc = docProcess
+		Else
+			Set m_lockParms.InboxDoc = m_dbObject.GetDocumentByUNID(m_lockParms.InboxUNID)
+		End If
+
+		' check if input document is locked.
+		' if true, either cancel the server agent or ask user for directions
+		If (m_lockParms.InboxDoc.HasItem(f_PWLOCK)) Then
+			sWhoHeld = m_lockParms.InboxDoc.GetFirstItem(f_PWLOCK).Text
+			Set dateHeld = m_lockParms.InboxDoc.GetFirstItem(f_PWLOCKD).DateTimeValue
+			If (m_isAgent) Then
+				' server agents can't wait for lock release
+				Error ERR_LOCK_FAILURE, MSG_LOCK_FAILURE & sWhoHeld & " since " & dateHeld.LSLocalTime
+			Else
+				' user-initiated action is running, send failure message
+				vReply = ws.Prompt(PROMPT_YESNOCANCEL, sTextTitle, "Selected" & sTextPrompt & sWhoHeld & " since " & dateHeld.LSLocalTime & ". Override lock?")
+				If (vReply < 1) Then
+					Error ERR_LOCK_FAILURE, MSG_LOCK_FAILURE & sWhoHeld & " since " & dateHeld.LSLocalTime
+				End If
+			End If
+		End If
+
+		' lock the document
+		Set dateLock = New NotesDateTime("")
+		Call dateLock.SetNow
+		Call m_lockParms.InboxDoc.ReplaceItemValue(f_PWLOCK, m_lockParms.LockOwner)
+		Call m_lockParms.InboxDoc.ReplaceItemValue(f_PWLOCKD, dateLock)
+		Call m_lockParms.InboxDoc.Save(True, True, False)
+
+		' save the document contents in case errors require a restore
+		Set m_InboxBackup = m_dbObject.CreateDocument
+		Call m_lockParms.InboxDoc.CopyAllItems(m_InboxBackup)
+
+		m_lockParms.InboxLock = True
+
+		' if this isn't a normal Inbox document, there won't be a status document association
+		If (docProcess.Form(0) <> "Memo" And Not docProcess.Form(0) Like "Reply*") Then
+			Goto lockDocuments_Exit
+		End If
+
+		' now search for the status document.  if none found just exit
+		m_lockParms.StatusUNID = PathwayFindRR(docProcess)
+		If (m_lockParms.StatusUNID = "") Then
+			Goto lockDocuments_Exit
+		End If
+
+		' create status doc object using returned UNID
+		Set docStatus = m_dbObject.GetDocumentByUNID(m_lockParms.StatusUNID)
+		Set m_lockParms.StatusDoc = docStatus
+
+		' only get this far if found a status document, so attempt to lock it.
+		If (m_lockParms.StatusDoc.HasItem(f_PWLOCK)) Then
+			sWhoHeld = m_lockParms.StatusDoc.GetFirstItem(f_PWLOCK).Text
+			Set dateHeld = m_lockParms.StatusDoc.GetFirstItem(f_PWLOCKD).DateTimeValue
+			If (m_isAgent) Then
+				' server agents can't wait for lock release
+				Error ERR_LOCK_FAILURE, MSG_LOCK_FAILURE & sWhoHeld & "since " & dateHeld.LSLocalTime
+			Else
+				' user-initiated action is running, send failure message
+				Set ws = New NotesUIWorkspace
+				vReply = ws.Prompt(PROMPT_YESNOCANCEL, sTextTitle, "Status" & sTextPrompt & sWhoHeld & " since " & dateHeld.LSLocalTime & ". Override lock?")
+				If (vReply < 1) Then
+					Error ERR_LOCK_FAILURE, MSG_LOCK_FAILURE & sWhoHeld & "since " & dateHeld.LSLocalTime
+				End If
+			End If
+		End If
+
+		' lock Status document
+		Call m_lockParms.StatusDoc.ReplaceItemValue(f_PWLOCK, m_lockParms.LockOwner)
+		Call m_lockParms.StatusDoc.ReplaceItemValue(f_PWLOCKD, dateLock)
+		Call m_lockParms.StatusDoc.Save(True, True, False)
+
+		' save the document contents in case errors require a restore
+		Set m_StatusBackup = m_dbObject.CreateDocument
+		Call m_lockParms.StatusDoc.CopyAllItems(m_StatusBackup)
+
+		m_lockParms.StatusLock = True
+
+lockDocuments_Exit:
+		Exit Sub
+
+lockDocuments_Error:
+		' if there was an error, need to release any locks this process obtained
+		Call releaseDocuments(False)
+		Call AddToStackTrace()
+
+	End Sub
+
+%REM
+	|
+	SUMMARY:
+	Name:	releaseDocuments
+	Input:	flag to indicate whether release should be forced
+	Output:	none
+
+	If input flag is True, set flags as if ownership had been obtained.  This might be done to revoke a lock
+	which has lost its owning process.
+	For each document, remove the lock fields if there is a document object and this process has ownership
+
+HISTORY:
+
+%END REM
+	Sub releaseDocuments (force As Integer)
+
+		Dim doc As NotesDocument
+
+		On Error Goto releaseDocuments_Error
+
+		' if caller specified the force option, make it look like we have ownership
+		If (force) Then
+			m_lockParms.InboxLock = True
+			m_lockParms.StatusLock = True
+		End If
+
+		' try to unlock Inbox document
+		If Not (m_lockParms.InboxDoc Is Nothing) Then
+			If (m_lockParms.InboxLock) Then
+				Call m_lockParms.InboxDoc.RemoveItem(f_PWLOCK)
+				Call m_lockParms.InboxDoc.RemoveItem(f_PWLOCKD)
+				Call m_lockParms.InboxDoc.Save(True, True, False)
+				Set m_lockParms.InboxDoc = Nothing
+				m_lockParms.InboxLock = False
+			End If
+		End If
+
+		' try to unlock Status document
+		If Not (m_lockParms.StatusDoc Is Nothing) Then
+			If (m_lockParms.StatusLock) Then
+				Set doc = m_lockParms.StatusDoc
+				Call doc.RemoveItem(f_PWLOCK)
+				Call doc.RemoveItem(f_PWLOCKD)
+				Call doc.Save(True, True, False)
+				m_lockParms.StatusLock = False
+			End If
+		End If
+
+releaseDocuments_Exit:
+		Exit Sub
+
+releaseDocuments_Error:
+		Call AddToStackTrace()
+
+	End Sub
+
+%REM
+	|
+SUMMARY:
+	Name:	checkLock
+	Input:	none
+	Output:	True or False, representing ownership of the documents locks
+
+	If the current user isn't the document's lock owner, return False and reset
+	the lock which has been revoked.
+
+HISTORY:
+
+%END REM
+	Function checkLock  As Integer
+
+		Dim doc As NotesDocument
+
+		Dim tmpA As String
+		Dim tmpB As String
+
+		On Error Goto Func_Error
+
+		' set default value
+		checkLock = True
+
+		' retrieve new objects from database and compare with stored values
+		Set doc = m_dbObject.GetDocumentByUNID(m_lockParms.InboxUNID)
+		If (doc Is Nothing) Then
+			Error ERR_INVALID_UNID, MSG_INVALID_UNID
+		End If
+
+		If (doc Is Nothing) Then
+			m_lockParms.LockThief = "Corrupted document object"
+			m_lockParms.InboxLock = False
+			checkLock = False
+			If (m_isAgent) Then
+				Error ERR_LOCK_DOC_MISSING, MSG_LOCK_DOC_MISSING
+			Else
+				Goto Func_Exit
+			End If
+		End If
+
+		If (Not doc.HasItem(f_PWLOCK)) Then
+			m_lockParms.LockThief = "Missing lock field"
+			m_lockParms.InboxLock = False
+			checkLock = False
+			If (m_isAgent) Then
+				Error ERR_LOCK_FIELD_MISSING, MSG_LOCK_FIELD_MISSING
+			Else
+				Goto Func_Exit
+			End If
+		End If
+
+		tmpA = doc.GetFirstItem(f_PWLOCK).Text
+		tmpB = m_lockParms.LockOwner
+
+		' check that the document's lock owner matches the original owner
+		If (tmpA <> tmpB) Then
+			m_lockParms.LockThief = doc.GetFirstItem(f_PWLOCK).Text
+			m_lockParms.InboxLock = False
+			checkLock = False
+		End If
+
+		' may not have locked a status document, so check first
+		If Not (m_lockParms.StatusDoc Is Nothing) Then
+			If (m_lockParms.StatusLock) Then
+				Set doc = m_dbObject.GetDocumentByUNID(m_lockParms.StatusUNID)
+				If (doc Is Nothing) Then
+					Error ERR_INVALID_UNID, MSG_INVALID_UNID
+				End If
+
+				' see if the lock field still exists
+				If Not (doc.HasItem(f_PWLOCK)) Then
+					m_lockParms.StatusLock = False
+					checkLock = False
+				End If
+
+				' check that the document's lock owner matches the original owner
+				If (doc.GetFirstItem(f_PWLOCK).Text <> m_lockParms.LockOwner) Then
+					m_lockParms.LockThief = doc.GetFirstItem(f_PWLOCK).Text
+					m_lockParms.StatusLock = False
+					checkLock = False
+				End If
+			End If
+		End If
+
+Func_Exit:
+		Exit Function
+
+Func_Error:
+		Call AddToStackTrace()
+
+	End Function
+
+%REM
+	|
+SUMMARY:
+	Name:	restoreDocuments
+	Input:		none
+	Output:	None
+
+	If the document has been modified but then cancelled by the user or if an error
+	occurs, the original document contents must be restored before unlocking.
+
+HISTORY:
+
+%END REM
+	Sub restoreDocuments
+		Dim doc As NotesDocument
+
+		On Error Goto Sub_Error
+
+		' restore all of the items on the locked documents from the backup documents
+		If Not (m_lockParms.InboxDoc Is Nothing) Then
+			If (m_lockParms.InboxLock) Then
+
+				' first remove all items to catch any additions
+				Forall itm In m_lockParms.InboxDoc.Items
+					Call m_lockParms.InboxDoc.RemoveItem(itm.Name)
+				End Forall
+
+				' then copy all items from the backup copy
+				Set doc = m_lockParms.InboxDoc
+				Call m_InboxBackup.CopyAllItems(doc, True)
+				Call doc.Save(True, False)
+			End If
+		End If
+
+		If Not (m_lockParms.StatusDoc Is Nothing) Then
+			If (m_lockParms.StatusLock) Then
+
+				' first remove all items to catch any additions
+				Forall itm In m_lockParms.StatusDoc.Items
+					Call m_lockParms.StatusDoc.RemoveItem(itm.Name)
+				End Forall
+
+				' then copy all items from the backup copy
+				Set doc = m_lockParms.StatusDoc
+				Call m_StatusBackup.CopyAllItems(doc, True)
+				Call doc.Save(True, False)
+			End If
+		End If
+
+Sub_Exit:
+		Exit Sub
+
+Sub_Error:
+		Call AddToStackTrace()
+
+	End Sub
+
+
+	' property retrieval functions
+	Public Property Get statusDoc As NotesDocument
+		Set statusDoc = m_lockParms.StatusDoc
+	End Property
+
+	Public Property Get inboxDoc As NotesDocument
+		Set inboxDoc = m_lockParms.InboxDoc
+	End Property
+
+	Public Property Get newOwner As String
+		newOwner = m_lockParms.LockThief
+	End Property
+
+End Class

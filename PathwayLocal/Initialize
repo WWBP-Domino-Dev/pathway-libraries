@@ -1,0 +1,17 @@
+Sub Initialize
+
+	Set session = New NotesSession
+
+	debugFile = UNIXFILE
+
+	' set output location of debug file
+	If (session.Platform Like "Win*") Then
+		debugFile = WINFILE
+	Else
+		If (session.Platform = "UNIX" Or session.Platform = "Linux" Or session.Platform = "macintosh/64") Then
+			debugFile = UNIXFILE
+		End If
+	End If
+
+
+End Sub

@@ -1,0 +1,129 @@
+%REM
+	Sub PathwayCreateOpportunity
+	Description: Comments for Sub
+%END REM
+Sub PathwayCreateOpportunity (docStatus As NotesDocument)
+
+	Dim session As NotesSession
+	Dim ws As NotesUIWorkspace
+	Dim uiDocA As NotesUIDocument
+	Dim uiDocB As NotesUIDocument
+	Dim doc As NotesDocument
+	Dim docDummy As NotesDocument
+	Dim docDummyUI As NotesUIDocument
+	Dim docPATH As NotesDocument
+	Dim docProfile As NotesDocument
+	Dim dbPWay As NotesDatabase
+	Dim dbOpp As NotesDatabase
+	Dim dc As NotesDocumentCollection
+	Dim vw As NotesView
+	Dim itm As NotesItem
+	Dim rtField As NotesRichTextItem
+	Dim rtDummy As NotesRichTextItem
+	Dim rtnav As NotesRichTextNavigator
+	Dim rtStyleNorm As NotesRichTextStyle
+	Dim rtStyleBold As NotesRichTextStyle
+	Dim rtStyleP As NotesRichTextParagraphStyle
+	Dim rtStylesP(1 To 2) As NotesRichTextParagraphStyle
+
+	Dim nX As Integer
+	Dim nY As Integer
+	Dim nR As Integer
+
+	Dim key As String
+	Dim keyList(1) As String
+	Dim sMsg As String
+	Dim search As String
+	Dim ResName As String
+	Dim ResAddr As String
+	Dim aTemplateEntries() As String
+	Dim aTemplateSections() As String
+	Dim resTypeList List As String
+	Dim resTypeArray() As String
+
+	Dim bEditPass As Boolean
+	Dim bReject As Boolean
+	Dim bFoundClass As Boolean
+	Dim bRetry As Boolean
+
+	Dim vReply As Variant
+
+	Dim docAdmin As NotesDocument
+	Dim rtAdmin As NotesRichTextItem
+	Dim sendList(3) As String
+
+	' 10/23/2009 change
+	Const ADMIN_1 = "deger@us.ibm.com"
+	Const ADMIN_2 = "dugslade@us.ibm.com"
+	Const ADMIN_DEV = "owenge@us.ibm.com"
+
+	Const MB_ICONEXCLAMATION = 48
+
+	' Set up the current environment
+	Set session = New NotesSession
+	Set ws = New NotesUIWorkspace
+	Set dbPWay = session.Currentdatabase
+
+	On Error GoTo SubError
+
+	' =========================================================================================
+	' Connect to the Projects database
+	Set dbOpp = New NotesDatabase(ProdServer, "Dept/WWBP/WWChannelOpportunities")
+
+	' Create a new Project document
+	Set doc = dbOpp.Createdocument()
+	Call doc.Replaceitemvalue("Form", "opp")
+
+	' Now fill in the default fields from the PATHway status doc.
+	Call doc.Replaceitemvalue("opp_pathways", Trim$(Str$(docStatus.Getitemvalue("PWayID")(0))))
+	Call doc.Replaceitemvalue("opp_partner", docStatus.Getitemvalue("PWayISV")(0))
+	Call doc.Replaceitemvalue("opp_requestor", docStatus.Getitemvalue("PWayTAM")(0))
+	Call doc.Replaceitemvalue("opp_product", docStatus.Getitemvalue("PWayProd")(0))
+	Call doc.Replaceitemvalue("opp_channelseller", docStatus.Getitemvalue("PWayResName")(0))
+	Call doc.Replaceitemvalue("opp_dealstatus", "Open")
+	Call doc.Replaceitemvalue("opp_dealsize", docStatus.Getitemvalue("PWayWebSphereRevPortion")(0))
+	Call doc.Replaceitemvalue("opp_number", docStatus.Getitemvalue("PWaySiebelNum")(0))
+	Call doc.Replaceitemvalue("opp_quarter", docStatus.Getitemvalue("PWayRevQtr")(0))
+	Call doc.Replaceitemvalue("opp_country", docStatus.Getitemvalue("PWayCountry")(0))
+	Call doc.Replaceitemvalue("opp_geo", docStatus.Getitemvalue("PWayGEO")(0))
+	Call doc.Replaceitemvalue("opp_workcomplete", "N")
+
+	' =========================================================================================
+	' Create a doc link to the PATHway request document
+	Call doc.Removeitem("opp_pathway_link")
+	Set rtField = doc.Createrichtextitem("opp_pathway_link")
+	Call rtField.AppendDocLink(docStatus, "PATHway Request")
+	Call doc.Save(True, False, False)
+
+	' =========================================================================================
+
+	' Notify admin(s) of new project
+	sendList(0) = ADMIN_1
+
+	Set docAdmin = dbOpp.CreateDocument
+	Call docAdmin.ReplaceItemValue("Form", "Memo")
+	Call docAdmin.Computewithform(False, False)
+	Call docAdmin.Replaceitemvalue("From", "CN=WebSphere PATHway/OU=Pittsburgh/O=IBM")
+	Call docAdmin.ReplaceItemValue("SendTo", sendList)
+	Call docAdmin.ReplaceItemValue("CopyTo", docStatus.Getitemvalue("PWayResAddr")(0))
+	Call docAdmin.Replaceitemvalue("INetFrom", PathwayMail)
+	Call docAdmin.Replaceitemvalue("ReplyTo", PathwayMail)
+	Call docAdmin.Replaceitemvalue("Principal", PathwayMail)
+	Call docAdmin.ReplaceItemValue("Subject", "New opportunity opened in WW Channel Opportunity Database: " & doc.GetItemValue("opp_pathways")(0))
+	Set rtAdmin = docAdmin.CreateRichTextItem("Body")
+	Call rtAdmin.AppendText("PATHway created new opportunuity for " & doc.GetItemValue("opp_partner")(0))
+	Call rtAdmin.Addnewline(2, 1)
+	Call rtAdmin.AppendText("==>  ")
+	Call rtAdmin.Appenddoclink(doc, "", "Link to Opportunity document")
+	Call docAdmin.Send(False)
+
+SubExit:
+	Exit Sub
+
+SubError:
+
+	Print Error & " - " & Err
+
+	Call AddToStackTrace()
+
+End Sub

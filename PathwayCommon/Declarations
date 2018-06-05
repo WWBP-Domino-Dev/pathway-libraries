@@ -1,0 +1,254 @@
+%INCLUDE "lsconst.lss"
+
+' Just define a single Notes object for every function
+Dim session As NotesSession
+Dim ws As NotesUIWorkspace
+Dim db As NotesDatabase
+Dim dbServer As NotesDatabase
+Dim doc As NotesDocument
+Dim uidoc As NotesUIDocument
+Dim rep As NotesReplication
+Dim repEntry As NotesReplicationEntry
+
+Dim rtBody As NotesRichTextItem
+Dim rsRed As NotesRichTextStyle
+Dim rsBold As NotesRichTextStyle
+Dim rsNormal As NotesRichTextStyle
+
+Dim serverName As String
+Dim serverPath As String
+Dim sDBsignature As String
+Dim search As String
+Dim aFields List As String
+Dim templateWarning(4) As String
+Dim FollowupText(12) As String
+Dim statusText(3) As String
+Dim statusNames List As String
+Dim aTemplateInput List As String
+Dim aTemplateFields List As String
+Dim aReqResp List As String
+Dim aReqLabels() As String
+Dim aReqFields() As String
+Dim bDebug As Boolean
+Dim foundServer As Boolean
+
+Const NL = {
+}
+Const ADMIN_SENDTO = "owenge@us.ibm.com"
+Const MEMO_SEND_TO = {owenge@us.ibm.com}
+Const MEMO_SUBJECT = {Error report from application 'Pathway'}
+Const SEP = "====================================================="
+
+Const HideSet = "1"
+Const HideReset = "0"
+Const TVERSION = "2.0"
+Const DATEVERSION = "Oct 23, 2009"
+
+
+Const ProdHost = "wwbpnotesa.dub.usoh.ibm.com/"
+Const ProdServer = "wwbpnotesa/IBMWWBP"
+Const ProdServerBackup = "wwbpnotesb/IBMWWBP"
+Const ProdPath = "Dept/WWBP/"
+Const ProdFile = "pathway.nsf"
+
+Const TestHost = "wwbpnotesa.dub.usoh.ibm.com/"
+Const TestServer = "wwbpnotesa/IBMWWBP"
+Const TestServerBackup = "wwbpnotesb/IBMWWBP"
+Const TestPath = "TestVersions/"
+Const TestFile = "test_pathway.nsf"
+
+Const ArchivePath = "Dept/WWBP/"
+Const ArchiveFile = "Pathway_Archive.nsf"
+
+Const PathwayMail = "pathway@wwbpnotesa.dub.usoh.ibm.com"
+Const PathwayInternetMail = "pathway@wwbpnotesa.dub.usoh.ibm.com"
+Const PathwayAdministrator = "Debra Nurkin/Piscataway/IBM"
+
+%REM
+Const ProdHost = "pghnotes6a.pgh.ibm.com/"
+Const ProdServer = "pghnotes6a/IBMPTT"
+Const ProdServerBackup = "pghnotes6b/IBMPTT"
+Const ProdPath = "Dept/WCC/"
+Const ProdFile = "pathway.nsf"
+
+Const TestHost = "pghnotes6a.pgh.ibm.com/"
+Const TestServer = "pghnotes6a/IBMPTT"
+Const TestServerBackup = "pghnotes6b/IBMPTT"
+Const TestPath = "Dept/WCC/"
+Const TestFile = "test_pathway.nsf"
+
+Const ArchivePath = "Dept/WCC/"
+Const ArchiveFile = "Pathway_Archive.nsf"
+
+Const PathwayMail = "pathway@pghnotes6a.pittsburgh.ibm.com"
+Const PathwayInternetMail = "pathway@pghnotes6a.pittsburgh.ibm.com"
+%END REM
+
+
+' ===================================
+Const ViewMRA = "Pathway MRA Records"
+
+Const RRPattern1 = "*RR [[]##*]*"
+Const StatPattern = "*STATUS[: ]*[[]#*]*"
+Const NOCASEORPITCH = 5
+Const f_CNTR = "ReqNumberCounter"
+
+Const f_SUBJ = "Subject"
+Const f_BODY = "Body"
+Const f_BODY2 = "$Body"
+Const f_FORM = "Form"
+Const f_FROM = "From"
+Const f_REPLY = "Reply"
+Const f_SEND = "SendTo"
+Const f_DATA = "PWayData"
+Const f_LOG = "PWayLog"
+Const f_PROF = "RPF"
+Const f_PWADV = "PWayAdvance"
+Const f_PWID = "PWayID"
+Const f_PWSTAT = "PWayStatus"
+Const f_PWCLSTAT = "PWayClosedStatus"
+Const f_PWTAM = "PWayTAM"
+Const f_PWISV = "PWayISV"
+Const f_PWHELP = "PWayHelp"
+Const f_PWPRI = "PWayPriority"
+Const f_PWADDR = "PWayAddr"
+Const f_PWOWN = "PWayOwner"
+Const f_PWREQ = "PWayReqTxt"
+Const f_PWUNID = "PWayUnid"
+Const f_PWDATE = "PWayNeeded"
+Const f_PWUPD = "PWayUpdate"
+Const f_PWCOMM = "PwayCurrStat"
+Const f_PWCOMMLOG = "PWayStatusLog"
+Const f_PWDLV = "PWayDeliver"
+Const f_PWDUR = "PWayDuration"
+Const f_PWDURTYP = "PWayDurationType"
+Const f_PWOPEN = "PWayOpen"
+Const f_PWOPENDT = "PWayOpenDate"
+Const f_PWCONT = "PWayContact"
+Const f_PWCONTN = "PWayContactNbr"
+Const f_PWTAMR = "PWayTAMReason"
+Const f_PWDATES = "PWayEngDate"
+Const f_PWDAYS = "PWayCountD"
+Const f_PWHOURS = "PWayCountH"
+Const f_PWLOC = "PWayLocation"
+Const f_PWRES = "PWayRes"
+Const f_PWLINK = "PWayLink"
+Const f_PWDSTART = "PWayDtStart"
+Const f_PWDEND = "PWayDtEnd"
+Const f_PWTL = "PWayTL"
+Const f_PWFUND = "PWayResFunding"
+Const f_PWFUNDTOT = "PWayFundAmt"
+Const f_PWFUNDCOST = "PWayFundCost"
+Const f_PWLOCK = "PWayLock"
+Const f_PWLOCKD = "PWayLockDate"
+Const f_PWCLOSE = "PWayClosed"
+Const f_PWCLOSEDT = "PWayClosedDate"
+Const f_PWREV = "PWayRevenue"
+Const f_PWREVTYP = "PWayRevType"
+Const f_PWRESPRV = "PWayResProvider"
+Const f_PWRESNAME = "PWayResName"
+Const f_PWRESNAME2 = "PWayResName2"
+Const f_PWRESNAME3 = "PWayResName3"
+Const f_PWRESADDR = "PWayResAddr"
+Const f_PWRESADDR2 = "PWayResAddr2"
+Const f_PWRESADDR3 = "PWayResAddr3"
+Const f_PWRESEXTRA = "PWayProvidedExtra"
+Const f_PWPRTYPE = "PWayPartnerType"
+Const f_PWJUST = "PWayJustify"
+Const f_PWRATE = "PWayRate"
+Const f_PWCOST = "PWayBaseCost"
+Const f_PWBASE = "PWayCalcBase"
+Const f_PWPLAY = "PWayPlayNum"
+Const f_PWPARTID = "PWayPartnerID"
+Const f_PWEDURLEVEL = "PWayEduReqLevel"
+Const f_PWMRR = "PWayCloudRecurRev"
+Const f_PWMRRYR = "PWayCloudRecurFirstYear"
+
+Const v_SEARCH = "Pathway Status Search"
+Const v_PROFILE = "Pathway Global Profile"
+
+Const LBL_TAM = "tm"
+Const LBL_ISV = "sv"
+Const LBL_STAT = "st"
+Const LBL_PRI = "pr"
+Const LBL_HELP = "tp"
+Const LBL_DUR = "ln"
+Const LBL_DLV = "dm"
+Const LBL_ADDR = "ad"
+Const LBL_BLOCK = "bl"
+Const LBL_FCLNAME = "fa"
+Const LBL_FCLNBR = "fn"
+Const LBL_DATE = "dt"
+Const LBL_LOC = "lc"
+Const LBL_OWN = "ow"
+Const LBL_PRTYPE = "pt"
+Const LBL_JUST = "js"
+Const LBL_PARTID = "pi"
+Const LBL_PLAY = "pl"
+Const LBL_MRR = "mrr"
+
+Const v_TAMFOLDER = "TAM Folders\"
+
+Const ERR_RR_NOT_IN_DOC = 30100
+Const ERR_RR_NOT_IN_DB = 30101
+Const ERR_RR_ALL_CONFLICTS = 30102
+Const ERR_SAVE_FAILURE = 30103
+Const ERR_INVALID_UNID = 30104
+Const ERR_PROFILE_MISSING = 30105
+Const ERR_RR_DUPLICATE = 30106
+Const ERR_PW_MISSING = 30107
+Const ERR_TEMPLATE_REJECTED = 30110
+Const ERR_ADV_REJECTED = 30111
+Const ERR_NO_MRA = 30112
+Const ERR_BAD_SOURCE = 30113
+Const ERR_LOCK_FAILURE = 30120
+Const ERR_LOCK_REVOKED = 30121
+Const ERR_LOCK_DOC_MISSING = 30122
+Const ERR_LOCK_FIELD_MISSING = 30123
+Const ERR_BODY_MISSING = 30130
+Const ERR_CANCEL = 30200
+Const ERR_NO_SERVER = 30250
+Const ERR_SUBJECT_FORMAT = 30920
+Const ERR_CONFLICT_CREATED = 30960
+
+Const MSG_RR_NOT_IN_DOC = "RR value not found in the document"
+Const MSG_RR_NOT_IN_DB = "Status document not found in db for RR "
+Const MSG_RR_ALL_CONFLICTS = "Only found conflict Status documents for "
+Const MSG_SAVE_FAILURE = "Failure saving document: "
+Const MSG_INVALID_UNID = "UNID of status document not found in database "
+Const MSG_PROFILE_MISSING = "Global profile document was not found"
+Const MSG_RR_DUPLICATE = "This request number already exists: "
+Const MSG_PW_MISSING = "Standard Pathway fields are missing"
+Const MSG_TEMPLATE_REJECTED = "Request template rejected from "
+Const MSG_ADV_REJECTED = "Advance requests don't have status documents"
+Const MSG_NO_MRA = "No MRA documents were found for this ISV"
+Const MSG_BAD_SOURCE = "'Weeks' status documents can't be used to reopen a request"
+Const MSG_LOCK_FAILURE = "Document is currently locked by "
+Const MSG_LOCK_REVOKED = "Document lock revoked by "
+Const MSG_LOCK_DOC_MISSING = "Document object has been deleted"
+Const MSG_LOCK_FIELD_MISSING = "The lock object no longer exists"
+Const MSG_BODY_MISSING = "Valid body field not found in document"
+Const MSG_CANCEL = "Operation cancelled"
+Const MSG_NO_SERVER = "Server copy of database could not be opened"
+Const MSG_CONFLICT_CREATED = "Agent has created conflict status document!"
+
+Const MSG_STATE_MISSING = "State value not found"
+Const MSG_DATENEEDED_MISSING = "Date Needed value not found"
+Const MSG_ISV_MISSING = "Partner value not found"
+Const MSG_DURATION_MISSING = "Length of Engagement value not found"
+Const MSG_DELIVERY_MISSING = "Delivery Method value not found"
+Const MSG_HELPREQ_MISSING = "Help Requested value not found"
+Const MSG_TAM_MISSING = "Requestor value not found"
+Const MSG_PRIORITY_MISSING = "Priority value not found"
+
+' Custom object type with attributes describing the lock state of the current documents
+Type lockParms
+	InboxDoc As Variant
+	StatusDoc As Variant
+	LockOwner As String
+	LockThief As String
+	InboxUNID As String
+	StatusUNID As String
+	InboxLock As Integer
+	StatusLock As Integer
+End Type

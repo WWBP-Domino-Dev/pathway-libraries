@@ -1,0 +1,272 @@
+Sub PathwayCopyReq
+
+	Dim doc As NotesDocument
+	Dim docOld As NotesDocument
+	Dim docShow As NotesDocument
+	Dim docProfile As NotesDocument
+	Dim docUI As NotesUIDocument
+	Dim docCopies() As NotesDocument
+	Dim collect As NotesDocumentCollection
+	Dim item As NotesItem
+	Dim vw As NotesView
+	Dim rtInput As NotesRichTextItem
+	Dim rtText As NotesRichTextItem
+	Dim dtPosted As NotesDateTime
+
+	Dim sReq As String
+	Dim sUnid As String
+	Dim sFolder As String
+	Dim sSubject As String
+	Dim sLineStatus As String
+
+	Dim x As Integer
+	Dim y As Integer
+	Dim nTest As Integer
+	Dim nReq As Integer
+	Dim nCount As Integer
+	Dim vReply As Variant
+
+	Dim aCopy(19) As String
+	Dim lockObj As New DocumentLock
+
+	aCopy(0) = "PWaySponsorOrg"
+	aCopy(1) = "PWayISV"
+	aCopy(2) = "PWayPriority"
+	aCopy(3) = "PWayDeliver"
+	aCopy(4) = "PWayHelp"
+	aCopy(5) = "PWayTAM"
+	aCopy(6) = "PWayAddress"
+	aCopy(7) = "PWayNeeded"
+	aCopy(8) = "PWayEndNeeded"
+	aCopy(9) = "PWayDuration"
+	aCopy(10) = "PWayDurationType"
+	aCopy(11) = "PWayContact"
+	aCopy(12) = "PWayContactNbr"
+	aCopy(13) = "PWayJustify"
+	aCopy(14) = "PWayPartnerType"
+	aCopy(15) = "PWayRevTotal"
+	aCopy(16) = "PWayWebSphereRevPortion"
+	aCopy(17) = "PWayDesc"
+	aCopy(18) = "PWaySponsor"
+	aCopy(19) = "PWayCloudRevRecur"
+
+	On Error Goto Sub_Error
+
+	' get source request from user
+	vReply = Inputbox$("Enter source request id", "Request Copy")
+	If (vReply <> "") Then
+		sReq = Cstr(vReply)
+	Else
+		Exit Sub
+	End If
+
+	' get copy count from user
+	vReply = InputBox$("Enter the number of copies", "Request Copy", "1")
+	If (vReply <> "") Then
+		nCount = CInt(vReply)
+		ReDim docCopies(1 To nCount)
+	Else
+		Error 30240, "The number of copies must be entered, even if it's only '1'"
+		Exit Sub
+	End If
+
+	' look for that request in the db
+	Set vw = db.GetView(v_SEARCH)
+
+	' search for matching documents in the Pathway Status Search view
+	Set docOld = Nothing
+	Set collect = vw.GetAllDocumentsByKey(Cdbl(sReq))
+	If (collect.Count = 0) Then
+		Error ERR_RR_NOT_IN_DB, MSG_RR_NOT_IN_DB & sReq
+	End If
+
+	' load the matching status doc
+	Set doc = collect.GetFirstDocument
+
+	' if there are multiple status docs for a long engagement, the first doc will not have
+	' the "PWayEngDate" field so this is the one we'll use
+	Do Until doc Is Nothing
+		If Not (doc.HasItem("PWayEngDate")) Then
+			Set docOld = doc
+			Exit Do
+		End If
+
+		Set doc = collect.GetNextDocument(doc)
+	Loop
+
+	' on the odd chance the main status doc is missing, take error exit
+	If (docOld Is Nothing) Then
+		Error ERR_RR_NOT_IN_DB, MSG_RR_NOT_IN_DB & sReq
+	End If
+
+	' Define text for automated response to request creation
+	aReqResp("Line1a") = "This is a confirmation that IBM Cloud PATHway has recently received your Resource Request.  The Request ID is "
+	aReqResp("Line1b") = " and it is currently under review.  Once approved, PATHway will assign the appropriate resource. " & NEWLINE & NEWLINE & _
+	"Please verify the accuracy of the information you have submitted.  It is imperative we have accurate and complete information to ensure deployment of appropriate resources.   " & _
+	"If you have any concerns or would like to raise the focus/priority on this request please email " & _
+	"IBM Cloud PATHway (" & PathwayInternetMail & ") " & _
+	"using the latest copy you have of your request thread, or contact Debra Nurkin/Piscataway/IBM (720-396-7197, Mobile: 908-812-1627) "
+	aReqResp("LineStatus1") = {For the current summary of the request refer to this URL:} & NEWLINE
+	aReqResp("LineStatus2") = "    http://" & ProdHost & ProdPath & ProdFile & "/PWStatus?ReadForm&PWayReq="
+
+	' date for reply doc
+	Set dtPosted = New NotesDateTime("Today")
+
+	Set docShow = dbServer.CreateDocument
+	Call docShow.AppendItemValue("Form", f_REPLY)
+	Call docShow.ReplaceItemValue("PostedDate", dtPosted)
+	Set rtInput = docShow.CreateRichTextItem(f_BODY)
+
+	' Build the fixed reply text in the Reply document
+	Call rtInput.AppendStyle(rsNormal)
+	Call rtInput.AppendText(aReqResp("Line1a") & nReq & aReqResp("Line1b"))
+	Call rtInput.AddNewLine(2)
+	Call rtInput.AppendText(aReqResp("LineStatus1"))
+
+	' found request, get ready to create.
+	' lock profile doc to create new request id
+	Set vw = dbServer.GetView(v_PROFILE)
+	If (vw.EntryCount > 0) Then
+		Set docProfile = vw.GetFirstDocument
+	Else
+		Error ERR_PROFILE_MISSING, MSG_PROFILE_MISSING
+	End If
+
+	' lock it from other users
+	Print "Lock the profile"
+	Call lockObj.lockDocuments(docProfile)
+
+	' generate next id in sequence
+	nReq = docProfile.GetFirstItem(f_CNTR).Text
+	nTest = nReq + 1
+
+	' make sure the new number is unique
+	Set vw = dbServer.GetView(v_SEARCH)
+	Set doc = vw.GetDocumentByKey(Cstr(nTest), True)
+	If Not (doc Is Nothing) Then
+		Error ERR_RR_DUPLICATE, MSG_RR_DUPLICATE & CStr(nTest)
+	End If
+
+	' 2016-03-31: add capability to create multiple request copies.  put all the doc processing in a loop.
+	For x = 1 To nCount
+		' increment request number for next pass
+		nReq = nReq + 1
+
+		' create new status doc, copy over selected fields
+		Print "Create new status doc for " & Str(nReq)
+		Set doc = dbServer.CreateDocument
+		Call doc.AppendItemValue("Form", f_DATA)
+		Call doc.ReplaceItemValue("Subject", "Status Document for RR " & nReq)
+		Call doc.ReplaceItemValue("SaveOptions", "0")
+		Call doc.ReplaceItemValue(f_PWID, nReq)
+		Call doc.ReplaceItemValue(f_PWSTAT, "New")
+
+		' copy selected items from the current doc to the new one
+		For y = 0 To UBound(aCopy)
+			If (docOld.Hasitem(aCopy(y))) Then
+				Set item = docOld.GetFirstItem(aCopy(y))
+				Print "Copy field " & item.Name
+				Call doc.CopyItem(item, aCopy(y))
+
+				' also add to reply doc
+				' 2016-03-31: this should not be necessary
+				' Call docShow.CopyItem(item, aCopy(x))
+			End If
+		Next
+
+		Call doc.ReplaceItemValue("PostedDate", dtPosted)
+		Call doc.ReplaceItemValue(f_PWUPD, dtPosted)
+		Call doc.AppendItemValue(f_PWOPENDT, dtPosted)
+
+		' create the non-PATHway fields ProtectFromArchive and $NoPurge
+		Call doc.AppendItemValue("ProtectFromArchive", "1")
+		Call doc.AppendItemValue("$NoPurge", "1")
+		Call doc.ComputeWithForm(False, False)
+
+		' add the new request doc to the queue
+		Set docCopies(x) = doc
+
+		' only update the Subject if this is the first pass
+		If (x = 1) Then
+			' process Reply doc fields SendTo and Subject
+			Call docShow.ReplaceItemValue("SendTo", docOld.GetFirstItem(f_PWADDR).Text)
+
+			sSubject = "RR [" & nReq & "]"
+			sSubject = sSubject & " | " & _
+			docOld.GetFirstItem(f_PWSTAT).Text & " | " & _
+			docOld.GetFirstItem(f_PWDATE).Text & ", " & _
+			docOld.GetFirstItem(f_PWISV).Text & ", " & _
+			docOld.GetFirstItem(f_PWDUR).Text & _
+			docOld.GetFirstItem(f_PWDURTYP).Text & ", " & _
+			docOld.GetFirstItem(f_PWDLV).Text & ", " & _
+			docOld.GetFirstItem(f_PWHELP).Text & " | " & _
+			docOld.GetFirstItem(f_PWTAM).Text & ", " & _
+			docOld.GetFirstItem(f_PWPRI).Text
+
+			sLineStatus = aReqResp("LineStatus2") & nReq
+		Else
+			sLineStatus = sLineStatus & NEWLINE & aReqResp("LineStatus2") & nReq
+		End If
+
+	Next
+
+	' Finish reply email text
+	Call rtInput.AppendText(sLineStatus)
+	Call rtInput.AddNewLine(2)
+	Call rtInput.AppendText(sDBsignature)
+
+	Call docShow.ReplaceItemValue("Subject", sSubject)
+
+	' update profile doc with new id.  if the save fails, don't save new request doc
+	Print "Update profile and finish..."
+	Call docProfile.ReplaceItemValue(f_CNTR, nReq)
+	If (docProfile.Save(True, False)) Then
+
+		' if profile doc saved, save the new status doc(s)
+		ForAll docSaved In docCopies
+			Call docSaved.Save(True, False)
+
+			sFolder = v_TAMFOLDER & docSaved.GetFirstItem(f_PWTAM).Text
+			Call docSaved.PutInFolder(sFolder)
+		End ForAll
+
+		' and then save the Reply doc
+		Set doc = docCopies(1)
+		sUnid = doc.UniversalID
+		Call docShow.ReplaceItemValue(f_PWUNID, sUnid)
+		Call docShow.ComputeWithForm(False, False)
+		Call docShow.Save(True, False)
+
+		Call docShow.PutInFolder("($Inbox)")
+	End If
+
+Sub_Exit:
+	' release the lock on the global profile document
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.releaseDocuments(False)
+	End If
+
+	If (db.Server = "" And foundServer) Then
+		db.Replicate(serverName)
+	End If
+
+	Set ws = New NotesUIWorkspace
+
+	' open the Reply document for editing if there is one
+	sUnid = docShow.UniversalID
+	Set docShow = db.GetDocumentByUnid(sUnid)
+	Set docUI = ws.EditDocument(False, docShow)
+
+	Call ws.ViewRefresh
+
+	Exit Sub
+
+Sub_Error:
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.releaseDocuments(False)
+		Set lockObj = Nothing
+	End If
+
+	Call AddToStackTrace()
+
+End Sub

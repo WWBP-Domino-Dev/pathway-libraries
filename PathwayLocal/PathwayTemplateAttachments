@@ -1,0 +1,34 @@
+Sub PathwayTemplateAttachments (doc As NotesDocument)
+
+	Dim sExtract As String
+	Dim z As Integer
+	Dim af As Variant
+	Dim obj As Variant
+
+	Dim hasFiles As Boolean
+
+	Const TEMPDIR = "C:\Temp\"
+
+	If (doc.HasEmbedded) Then
+		z = -1
+
+		af = Evaluate("@AttachmentNames",doc)
+		Forall afName In af
+			Set obj = doc.GetAttachment(afName)
+
+			sExtract = TEMPDIR & afName
+
+			' extract the file to the computed location
+			obj.ExtractFile(sExtract)
+
+			' and add this file to the notification list
+			z = z + 1
+			Redim Preserve afsList(z)
+			afsList(z) = afName
+
+			hasFiles = True
+		End Forall
+	End If
+
+
+End Sub

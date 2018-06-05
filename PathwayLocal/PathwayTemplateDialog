@@ -1,0 +1,151 @@
+Sub PathwayTemplateDialog (doc As NotesDocument)
+
+%REM
+Name:
+	PathwayTemplateDialog
+
+Arguments:
+	doc		Inbox document passed from PathwayProcessTemplate
+
+Called By:
+	Subroutine PathwayProcessTemplate
+
+Description:
+	Present the template to the user using the form "PWayCreate" in a dialog box.   Certain fields are validated just for existence
+	and saved in global array "aTemplateInput( )".  This array will be referenced by the calling subroutine complete processing.
+
+History:
+
+07/17/2012:
+	Deleted obsolete code.
+
+05/13/2009:
+	Added editing for optional field PWayEduReqLevel
+
+%END REM
+
+	Dim dtRR As NotesDateTime
+	Dim nmFolder As NotesName
+
+	Dim sErr As String
+	Dim sText As String
+	Dim nErr As Integer
+	Dim vReply As Variant
+
+	Const DEFAULT = "<select>"
+
+	On Error Goto Sub_Error
+
+	vReply = False
+
+	' 9/28/2015
+	' This code was moved out of the common library so it must be
+	' explicitly executed when needed
+	aTemplateFields(LBL_TAM) = "Requestor Name"
+	aTemplateFields(LBL_ISV) = "Partner Name"
+	aTemplateFields(LBL_STAT) = "PATHway Status"
+	aTemplateFields(LBL_PRI) = "Request Priority"
+	aTemplateFields(LBL_HELP) = "Type of Service"
+	aTemplateFields(LBL_DUR) = "Length of Engagement"
+	aTemplateFields(LBL_DLV) = "Delivery Method"
+	aTemplateFields(LBL_DATE) = "Engagement Start Date"
+	aTemplateFields(LBL_ADDR) = "Requestor's Email Address"
+	aTemplateFields(LBL_BLOCK) = "Duration Increment (months, weeks, etc.)"
+	aTemplateFields(LBL_FCLNAME) = "Focal Point Name"
+	aTemplateFields(LBL_FCLNBR) = "Focal Point Phone Number"
+	aTemplateFields(LBL_OWN) = "Request Owner"
+	aTemplateFields(LBL_PRTYPE) = "Partner Type"
+	aTemplateFields(LBL_JUST) = "Business Justification"
+
+	' if the Partner Name dialog box is still the default value, then replace it with the new value
+	' this means that the requestor did not select an existing partner but instead entered a new one
+	If (doc.GetItemValue("PWayISV")(0) = DEFAULT) Then
+		' replace the default value with the new one
+		Call doc.ReplaceItemValue("PWayISV", doc.GetItemValue("PWayNewISV")(0))
+	End If
+
+	' prompt user with edit window
+	Do While vReply = False
+		vReply =  ws.DialogBox("PWayCreate", True, True, False, False, False, False, "Verify request values", doc, True)
+		If (vReply = False) Then
+			Error ERR_CANCEL, MSG_CANCEL
+		End If
+
+		aTemplateInput(LBL_ISV) = doc.GetItemValue(f_PWISV)(0)				' "sv" = "PWayISV"
+		aTemplateInput(LBL_TAM) = Fulltrim(doc.GetItemValue(f_PWTAM)(0))	' "tm" = "PWayTAM"
+		aTemplateInput(LBL_STAT) = doc.GetItemValue(f_PWSTAT)(0)			' "st" = "PWayStatus"
+		aTemplateInput(LBL_PRI) = doc.GetItemValue(f_PWPRI)(0)'				' "pr" = "PWayPriority"
+		aTemplateInput(LBL_HELP) = doc.GetItemValue(f_PWHELP)(0)			' "tp" = "PWayHelp"
+		aTemplateInput(LBL_DUR) = doc.GetItemValue(f_PWDUR)(0)				' "ln" = "PWayDuration"
+		aTemplateInput(LBL_DLV) = doc.GetItemValue(f_PWDLV)(0)				' "dm" = "PWayDeliver"
+		aTemplateInput(LBL_ADDR) = doc.GetItemValue(f_PWADDR)(0)			' "ad" = "PWayAddr"
+		aTemplateInput(LBL_BLOCK) = doc.GetItemValue(f_PWDURTYP)(0)			' "bl" = "PWayDurationType"
+		aTemplateInput(LBL_FCLNAME) = doc.GetItemValue(f_PWCONT)(0)			' "fa" = "PWayContact"
+		aTemplateInput(LBL_FCLNBR) = doc.GetItemValue(f_PWCONTN)(0)			' "fn" = "PWayContactNbr"
+		aTemplateInput(LBL_PRTYPE) = doc.GetItemValue(f_PWPRTYPE)(0)		' "pt" = "PWayPartnerType"
+		aTemplateInput(LBL_JUST) = doc.GetItemValue(f_PWJUST)(0)			' "js" = "PWayJustify"
+
+		Set nmFolder = New NotesName(aTemplateInput(LBL_TAM))
+
+		Set dtRR = doc.GetFirstItem(f_PWDATE).DateTimeValue
+		If (Len(doc.GetFirstItem(f_PWDATE).Text) > 0) Then
+			If (dtRR.IsValidDate) Then
+				aTemplateInput(LBL_DATE) = dtRR.DateOnly
+			Else
+				aTemplateInput(LBL_DATE) = ""
+			End If
+		Else
+			aTemplateInput(LBL_DATE) = ""
+		End If
+
+		' validate all specified fields.  checking for data, not evaluating content
+		sErr = ""
+		nErr = 0
+		Forall value In aTemplateInput
+
+			If (Len(value) = 0) Then
+				Print Listtag(value)
+				nErr = nErr + 1
+				sErr = sErr & nErr & ": " & aTemplateFields(Listtag(value)) & " must have a value" & NL
+			Else
+				' some fields don't deal well with certain characters later on.  The new Business Justification field is an exception.
+				If (Listtag(value) <> LBL_JUST) Then
+					If (value Like "*,*" Or value Like "*|*") Then
+						Print Listtag(value)
+						nErr = nErr + 1
+						sErr = sErr & nErr & ": " & aTemplateFields(Listtag(value)) & " must not contain a comma or bar: '" & value & "'" & NL
+					End If
+				End If
+			End If
+		End Forall
+
+		' if Education is requested then certain additional fields are required
+		If (doc.GetItemValue(f_PWHELP)(0) Like "*Education*") Then
+			If (Len(doc.GetItemValue(f_PWEDURLEVEL)(0)) = 0) Then
+				nErr = nErr + 1
+				sErr = sErr & nErr & ": " & "If Education/Training is selected the Education Required Competence must be specified" & NL
+			End If
+		End If
+
+		If (Len(sErr) > 0) Then
+			sErr = "Field validation errors:" & NL & sErr
+			Msgbox sErr, 48, "Process New Request Template"
+			vReply = False
+		End If
+
+	Loop
+
+	' have the user verify the requestor's name. variations will generate multiple folders and cause confusion.
+	aTemplateInput(LBL_TAM) = Inputbox$("Verify requestor's name", "Process New Request ", nmFolder.Common)
+
+Sub_Exit:
+	Exit Sub
+
+Sub_Error:
+	'If (Err = ERR_CANCEL) Then
+	'	Resume Sub_Exit
+	'End If
+
+	Call AddToStackTrace()
+
+End Sub

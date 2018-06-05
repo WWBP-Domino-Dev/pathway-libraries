@@ -1,0 +1,274 @@
+Sub PathwayNewMail (docIn As NotesDocument)
+%REM
+SUMMARY:
+	Called by agent PATHway\InboxProcessor when new mail is received that has
+	properly formatted Subject text.  Do the following:
+		Call routine to locate the matching status document and lock it and the new Inbox document
+		Update the Inbox and Status documents with new values from the Subject line
+		Call routine to release document locks
+
+HISTORY:
+	6/7/2004:	created by g.owen
+
+%END REM
+
+	Dim docFolder As NotesDocument
+	Dim docStatus As NotesDocument
+	Dim nmFrom As NotesName
+	Dim dtRR As NotesDateTime
+	Dim dtUpdate As NotesDateTime
+	Dim vwCollect As NotesViewEntryCollection
+	Dim vwe As NotesViewEntry
+	Dim vw As NotesView
+
+	Dim lockObj As New DocumentLock
+
+	Dim sFolder As String
+	Dim sBuffer As String
+	Dim sTemp As String
+	Dim sTemp2 As String
+	Dim sState As String
+	Dim sDuration As String
+	Dim sIncrement As String
+	Dim sPWayUNID As String
+	Dim sThisUNID As String
+
+	Dim nRC As Integer
+	Dim nPos As Integer
+	Dim nPos2 As Integer
+
+	On Error Goto Sub_Error
+
+'	M A I N ============================
+	Set dtUpdate = New NotesDateTime("")
+	Call dtUpdate.SetNow
+
+	sBuffer = docIn.GetItemValue("Subject")(0)
+	sThisUNID = docIn.UniversalID
+
+	' load Inbox view collection for post-save processing
+	Set vw = db.GetView("($Inbox)")
+	Set vwCollect = vw.AllEntries
+
+	sPWayUNID = PathwayFindRR(docIn)
+	If (sPWayUNID <> "") Then
+		Set docStatus = db.GetDocumentByUNID(sPWayUNID)
+	Else
+		Goto Sub_Exit
+	End If
+
+	' lock the status document
+	Call lockObj.lockDocuments(docStatus)
+
+	' the Subject line is formatted with these fields:
+	' RR [nn] | <status> | <date>, <ISV>, <duration>, <delivery>, <help> | <TAM>, <priority>
+	' 	PWayStatus
+	' 	PWayNeeded
+	' 	PWayISV
+	' 	PWayDuration
+	' 	PWayDeliver
+	'	PWayHelp
+	' 	PWayTAM
+	' 	PWayPriority
+	' so now parse the Subject string and extract the various tokens
+
+	' 1. extract the PATHway status
+	If (sBuffer Like RRPattern1) Then
+		nPos = Instr(1, sBuffer, "|") + 1
+	Else
+		nPos = Instr(1, sBuffer, "]") + 1
+	End If
+	nPos2 = Instr(nPos, sBuffer, "|")
+	If (nPos2 = 0) Then
+		Error ERR_SUBJECT_FORMAT, MSG_STATE_MISSING
+	End If
+	sState = Fulltrim(Mid$(sBuffer, nPos, nPos2 - nPos))
+
+	If (sState <> docStatus.GetItemValue("PWayStatus")(0)) Then
+		Call docStatus.ReplaceItemValue("PWayStatus", sState)
+	End If
+
+	' 2. extract DateNeeded
+	sBuffer = Right$(sBuffer, Len(sBuffer) - nPos2)
+	sTemp = Fulltrim(Strleft(sBuffer, ",", NOCASEORPITCH))
+	If (Len(sTemp) = 0) Then
+		Error ERR_SUBJECT_FORMAT, MSG_DATENEEDED_MISSING
+	End If
+	If (Ucase$(sTemp) Like "*IMMEDIATELY*" Or Ucase$(sTemp) Like "*ASAP*") Then
+		Set dtRR = New NotesDateTime("Today")
+	Else
+		Set dtRR = New NotesDateTime(sTemp)
+		If (Not dtRR.IsValidDate) Then
+			Set dtRR = New NotesDateTime("Today")
+		End If
+	End If
+
+	' 3. extract ISV name
+	sBuffer = Strright(sBuffer, ",", NOCASEORPITCH)
+	aFields(LBL_ISV) = Fulltrim(Strleft(sBuffer, ",", NOCASEORPITCH))
+	If (Len(aFields(LBL_ISV)) = 0) Then
+		Error ERR_SUBJECT_FORMAT, MSG_ISV_MISSING
+	End If
+
+	' 4. extract Length of Engagement
+	sBuffer = Strright(sBuffer, ",", NOCASEORPITCH)
+	aFields(LBL_DUR) = Fulltrim(Strleft(sBuffer, ",", NOCASEORPITCH))
+	If (Len(aFields(LBL_DUR)) = 0) Then
+		Error ERR_SUBJECT_FORMAT, MSG_DURATION_MISSING
+	End If
+
+	' 4/18/2003
+	' validate the duration token according to current rules
+	sDuration = Strleft(aFields(LBL_DUR), " ")
+	sIncrement = Strright(aFields(LBL_DUR), " ")
+	Select Case Ucase$(sIncrement)
+	Case "HOURS", "DAYS", "WEEKS", "MONTHS", "YEARS"
+		nRC = True
+	Case Else
+		nRC = False
+	End Select
+	' 7/30/2003
+	' fixed reformatting of the Duration token.  "<3><Months>" was becoming "<3 Months><Months>"
+	If (Isnumeric(sDuration) And nRC) Then
+		aFields(LBL_DUR) = sDuration
+		aFields(LBL_BLOCK) = sIncrement
+	Else
+		aFields(LBL_BLOCK) = "Custom"
+	End If
+
+	' 5. extract Delivery Method
+	sBuffer = Strright(sBuffer, ",", NOCASEORPITCH)
+	aFields(LBL_LOC) = Fulltrim(Strleft(sBuffer, ",", NOCASEORPITCH))
+	If (Len(aFields(LBL_LOC)) = 0) Then
+		Error ERR_SUBJECT_FORMAT, MSG_DELIVERY_MISSING
+	End If
+
+	' 6. extract Help Requested
+	sBuffer = Strright(sBuffer, ",", NOCASEORPITCH)
+	aFields(LBL_HELP) = Fulltrim(Strleft(sBuffer, "|", NOCASEORPITCH))
+	If (Len(aFields(LBL_HELP)) = 0) Then
+		Error ERR_SUBJECT_FORMAT, MSG_HELPREQ_MISSING
+	End If
+
+	' 7. extract TAM name
+	sBuffer = Strright(sBuffer, "|", NOCASEORPITCH)
+	aFields(LBL_TAM) = Fulltrim(Strleft(sBuffer, ",", NOCASEORPITCH))
+	If (Len(aFields(LBL_TAM)) = 0) Then
+		Error ERR_SUBJECT_FORMAT, MSG_TAM_MISSING
+	End If
+
+	' 8. extract Priority
+	sBuffer = Strright(sBuffer, ",", NOCASEORPITCH)
+	aFields(LBL_PRI) = Fulltrim(sBuffer)
+	If (Len(aFields(LBL_PRI)) = 0) Then
+		Error ERR_SUBJECT_FORMAT, MSG_PRIORITY_MISSING
+	End If
+
+	' update the status document
+	Call docStatus.ReplaceItemValue(f_PWTAM, aFields(LBL_TAM))
+	Call docStatus.ReplaceItemValue(f_PWISV, aFields(LBL_ISV))
+	Call docStatus.ReplaceItemValue(f_PWPRI, aFields(LBL_PRI))
+	Call docStatus.ReplaceItemValue(f_PWHELP, aFields(LBL_HELP))
+	Call docStatus.ReplaceItemValue(f_PWDUR, aFields(LBL_DUR))
+	Call docStatus.ReplaceItemValue(f_PWDURTYP, aFields(LBL_BLOCK))
+	Call docStatus.ReplaceItemValue(f_PWDATE, dtRR)
+	Call docStatus.ReplaceItemValue(f_PWUPD, dtUpdate)
+	Call docStatus.ReplaceItemValue(f_PWDLV, aFields(LBL_LOC))
+	Call docStatus.ComputeWithForm(False, False)
+
+	' update the Inbox document
+	Call docIn.ReplaceItemValue(f_PWID, docStatus.GetItemValue("PWayID")(0))
+	Call docIn.ReplaceItemValue(f_PWTAM, aFields(LBL_TAM))
+	Call docIn.ReplaceItemValue(f_PWISV, aFields(LBL_ISV))
+	Call docIn.ReplaceItemValue(f_PWSTAT, sState)
+	Call docIn.ReplaceItemValue(f_PWOWN, docStatus.GetItemValue("PWayOwner")(0))
+	Call docIn.ReplaceItemValue(f_PWADDR, docStatus.GetItemValue("PWayAddr")(0))
+	Call docIn.ReplaceItemValue(f_PWPRI, aFields(LBL_PRI))
+	Call docIn.ReplaceItemValue(f_PWHELP, aFields(LBL_HELP))
+	Call docIn.ReplaceItemValue(f_PWDUR, aFields(LBL_DUR))
+	Call docIn.ReplaceItemValue(f_PWDURTYP, aFields(LBL_BLOCK))
+	Call docIn.ReplaceItemValue(f_PWDATE, dtRR)
+	Call docIn.ReplaceItemValue(f_PWUPD, dtUpdate)
+	Call docIn.ReplaceItemValue(f_PWUNID, sPWayUNID)
+	Call docIn.ReplaceItemValue(f_PWDLV, aFields(LBL_LOC))
+
+'	if the incoming document is from the TAM, go ahead and set the update flag (per Sachin)
+	If (docIn.HasItem("INetFrom")) Then
+		Set nmFrom = New NotesName(docIn.INetFrom(0))
+	Elseif (docIn.HasItem("SMTPOriginator")) Then
+		Set nmFrom = New NotesName(docIn.SMTPOriginator(0))
+	Else
+		Set nmFrom = New NotesName(docIn.From(0))
+	End If
+	If (nmFrom.Addr821 = docStatus.GetItemValue(f_PWADDR)(0)) Then
+		Call docIn.ReplaceItemValue("StatusUpd", 1)
+		Call docIn.ReplaceItemValue("StatusTimeStamp", dtUpdate)
+		Call docIn.ComputeWithForm(False, False)
+	End If
+
+	' make sure this routine still owns the locks before committing updates
+	If (lockObj.checkLock) Then
+		' try to save the status document.  if it fails, retry once, then force the save if it's still failing
+		If Not (docStatus.Save(False, False, True)) Then
+			Sleep 20
+			If Not (docStatus.Save(False, False, True)) Then
+				Call docStatus.Save(True, False, True)
+			End If
+		End If
+		' since the status document is saved, force the save of the Inbox document
+		Call docIn.Save(True, False, False)
+	Else
+		' this is extremely unlikely, but the lock could have been taken away
+		Error ERR_LOCK_REVOKED, MSG_LOCK_REVOKED & lockObj.newOwner
+	End If
+
+	' move existing documents for this request to the appropriate TAM folder
+	Set vwe = vwCollect.GetFirstEntry
+	Do Until vwe Is Nothing
+		Set docFolder = vwe.Document
+
+		' bypass documents which either don't have a Path UNID field or don't have
+		' a matching one.
+		If Not (docFolder.HasItem(f_PWUNID)) Then
+			Goto NextDoc
+		End If
+		If (Len(docFolder.GetItemValue(f_PWUNID)(0)) = 0) Then
+			Goto NextDoc
+		End If
+		If (docFolder.GetItemValue(f_PWUNID)(0) <> sPWayUNID) Then
+			Goto NextDoc
+		End If
+
+		sFolder = v_TAMFOLDER & docFolder.GetItemValue(f_PWTAM)(0)
+
+		' remove all the Pathway fields
+		Forall itm In docFolder.Items
+			If (Ucase$(itm.Name) Like "PWAY*") Then
+				Call docFolder.RemoveItem(itm.Name)
+			End If
+		End Forall
+
+		Call docFolder.Save(True, True, True)
+
+		Call docFolder.PutInFolder(sFolder, True)
+		Call docFolder.RemoveFromFolder("($Inbox)")
+
+NextDoc:
+		Set vwe = vwCollect.GetNextEntry(vwe)
+	Loop
+
+Sub_Exit:
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.releaseDocuments(False)
+	End If
+
+	Exit Sub
+
+Sub_Error:
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.releaseDocuments(False)
+	End If
+
+	Call AddToStackTrace()
+
+End Sub

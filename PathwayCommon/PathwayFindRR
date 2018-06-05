@@ -1,0 +1,136 @@
+Function PathwayFindRR (doc As NotesDocument) As String
+
+%REM
+Name:
+	PathwayFindRR
+
+Arguments:
+	doc		selected Memo or Reply document from the Inbox
+
+Called By:
+	Various agents and library routines
+
+Description:
+	Find the status document associated with this document based on the request number.
+	The number will first be searched for in the Subject line, if it follows standard formatting.
+	If that fails, search the Body field for the reformatted request text which will contain the number.
+	A failure to find a request number will generate an internal error which will allow the user to
+	supply the number manually.
+
+	Once the request number is found, look for a matching status document in the "Pathway Status Search" view.
+	If a matching document is found then the UNID of the document will be returned to the caller.
+	A failure to find a matching document here will generate a system error which will terminate
+	the function,
+
+HISTORY:
+%END REM
+
+	Dim vw As NotesView
+	Dim cd As NotesDocumentCollection
+	Dim docFind As NotesDocument
+	Dim agent As NotesAgent
+
+	Dim subject As String
+	Dim search As String
+	Dim sReq As String
+	Dim cr As String
+
+	Dim nReqD As Double
+	Dim nReq As Integer
+	Dim index As Integer
+	Dim nRC As Integer
+	Dim vReply As Variant
+
+	Const IDPATTERN = "* your ??Resource Request *"
+	Const EMPTY = ""
+
+	cr = Chr(13) & Chr(10)
+
+	On Error Goto Function_Error
+
+	Set vw = db.GetView(v_SEARCH)
+	Call vw.Refresh
+
+	PathwayFindRR = ""
+
+	' attempt to extract the request number from the document.
+	' the first time looks in the Subject field.  If that fails, a second
+	' check is made for the Body field.
+	sReq = ""
+	For index = 1 To 2
+		Select Case index
+		Case 1
+			' get the test string from the Subject field
+			subject = doc.GetItemValue("Subject")(0)
+			If (subject Like RRPattern1) Then
+				subject = Strright(subject, "RR [")
+				sReq = Fulltrim(Strleft(subject, "]"))
+			End If
+		Case 2
+			' get the test string from the Body field.  This may have the original
+			' reformatted request text
+			Stop
+			If (doc.HasItem("Body")) Then
+				subject = doc.GetFirstItem("Body").Text
+				If (subject Like IDPATTERN) Then
+					nRC = Instr(1, subject, " your " & cr & "Resource Request ", 5)
+					subject = Mid$(subject, nRC + 29, 6 )
+					subject = Strright(subject, "[")
+					sReq = Fulltrim(Strleft(subject, "]"))
+				End If
+			End If
+		End Select
+		If (sReq <> EMPTY) Then
+			Exit For
+		End If
+	Next
+
+	' a failure to find a number generates an error which will allow the user to input the number
+	If (sReq = EMPTY) Then
+		Error ERR_RR_NOT_IN_DOC, MSG_RR_NOT_IN_DOC
+	End If
+
+HaveRR:
+	' found a request number so look for matching status document.
+	' first make sure it's within the current limits
+'	nReqD = Cdbl(sReq)
+'	If (nReqD > 32767) Then
+'		Error ERR_RR_NOT_IN_DB, MSG_RR_NOT_IN_DB & sReq
+'	End If
+
+	If (IsNumeric(sReq)) Then
+		nReq = CInt(sReq)
+	Else
+		Error 30910, "Document " & doc.Noteid & " has request string of '" & sReq & "'"
+	End If
+
+	Set docFind = vw.GetDocumentByKey(nReq)
+	If (docFind Is Nothing) Then
+		Error ERR_RR_NOT_IN_DB, MSG_RR_NOT_IN_DB & sReq
+	End If
+
+	' return the doc's UNID to the caller
+	PathwayFindRR = docFind.UniversalID
+
+Function_Exit:
+	' return value is set before reaching this point
+	Exit Function
+
+Function_Error:
+	' check for the special error which allows the user to supply the request number
+	If (Err = ERR_RR_NOT_IN_DOC Or Err = ERR_RR_NOT_IN_DB) Then
+		Set agent = session.CurrentAgent
+		If (agent Is Nothing) Then
+			vReply = Inputbox$("Know the request #?  Couldn't reliably find it in the document.", "Status document retrieval")
+			If (vReply <> "") Then
+				sReq = Cstr(vReply)
+				Resume HaveRR
+			End If
+		Else
+			Resume Function_Exit
+		End If
+	End If
+
+	Call AddToStackTrace()
+
+End Function

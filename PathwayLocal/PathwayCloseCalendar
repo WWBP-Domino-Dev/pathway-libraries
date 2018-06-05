@@ -1,0 +1,196 @@
+Function PathwayCloseCalendar (doc As NotesDocument, dtStart As NotesDateTime, dtEnd As NotesDateTime, aRepeat() As Variant) As Variant
+
+	Dim docCal1 As NotesDocument
+	Dim docCal2 As NotesDocument
+	Dim rtItem As NotesRichTextItem
+	Dim rtBody1 As NotesRichTextItem
+	Dim rtBody2 As NotesRichTextItem
+
+	Dim sCalSubject As String
+	Dim sCalTopic As String
+	Dim sCalLocation As String
+
+	Dim aExclude(2) As String
+
+	Dim nDates As Integer
+	Dim nGap As Integer
+
+	Dim vStartDate As Variant
+	Dim vStartTime As Variant
+	Dim vEndDate As Variant
+	Dim vEndTime As Variant
+
+	Dim aDocs(1) As NotesDocument
+
+	Const SevenDays = 604800
+
+	aExclude(0) = "D"
+	aExclude(1) = "A"
+	aExclude(2) = "S"
+
+	On Error Goto Func_Error
+
+	' some fields require just the date or time component
+	vStartDate = Cdat(dtStart.DateOnly)
+	vStartTime = Cdat(dtStart.TimeOnly)
+	vEndDate = Cdat(dtEnd.DateOnly)
+	vEndTime = Cdat(dtEnd.TimeOnly)
+
+	' need to know how many calendar entries are in the sequence
+	nDates = Ubound(aRepeat) + 1
+
+	' set the interval between calendar entries
+	If (dtEnd.TimeDifference(dtStart) > SevenDays) Then
+		nGap = 7
+	Else
+		nGap = 1
+	End If
+
+	' there could be multiple persons assigned.   just show the first in the Subject text,
+	' but list them all in the body of the calendar entry.
+	sCalSubject = doc.GetItemValue(f_PWISV)(0) & ": " & doc.GetItemValue(f_PWRESNAME)(0) & ": " & dtStart.DateOnly & " - " & dtEnd.DateOnly
+	Forall resname In doc.GetItemValue(f_PWRESNAME)
+		sCalTopic = sCalTopic & resname & " and "
+	End Forall
+	sCalTopic = Strleftback(sCalTopic, " and ")
+	sCalTopic = sCalTopic & " from " & dtStart.DateOnly & " to " & dtEnd.DateOnly & " ( RR [" & doc.GetItemValue(f_PWID)(0) & "] )"
+	sCalLocation = doc.GetItemValue(f_PWLOC)(0)
+
+	' =========================================
+	' create the control document
+	Set docCal1 = db.CreateDocument
+	docCal1.Subject = sCalSubject
+	docCal1.Form = "Appointment"
+	docCal1.AppointmentType = "4"
+	docCal1.AppointmentType_us = "3"
+	docCal1.Location = sCalLocation
+	docCal1.OrgRepeat = "1"
+	docCal1.OrgTable = "C0"
+	docCal1.Logo = "StdNotesLtr20"
+	docCal1.MeetingType = "1"
+	docCal1.dspNum = nDates
+	docCal1.dspStart = dtStart.DateOnly
+	docCal1.RepeatFor = nDates
+	Select Case nGap
+	Case 1
+		docCal1.RepeatForUnit = "D"
+	Case 7
+		docCal1.RepeatForUnit = "W"
+	End Select
+	docCal1.RepeatHow = "F"
+	docCal1.RepeatInterval = "1"
+	docCal1.Repeats = "1"
+	docCal1.RepeatWeekends = "D"
+	docCal1.SEQUENCENUM = 1
+	docCal1.txtNum = nDates
+	docCal1.UpdateSeq = "1"
+	docCal1.Principal = PathwayMail
+	docCal1.From = PathwayMail
+	docCal1.Chair = PathwayMail
+
+	Call docCal1.ReplaceItemValue("$NoPurge", dtEnd)
+	Call docCal1.ReplaceItemValue("StartDate", vStartDate)
+	Call docCal1.ReplaceItemValue("StartDateTime", dtStart)
+	Call docCal1.ReplaceItemValue("StartTime", vStartTime)
+	Call docCal1.ReplaceItemValue("EndDate", vEndDate)
+	Call docCal1.ReplaceItemValue("EndDateTime", dtStart)
+	Call docCal1.ReplaceItemValue("EndTime", vEndTime)
+	Call docCal1.ReplaceItemValue("ExcludeFromView", aExclude)
+	Call docCal1.ReplaceItemValue("lastDate", dtEnd)
+	Call docCal1.ReplaceItemValue("RepeatCustom", vStartDate)
+	Call docCal1.ReplaceItemValue("RepeatDates", aRepeat)
+	Call docCal1.ReplaceItemValue("RepeatEndDates", aRepeat)
+	Call docCal1.ReplaceItemValue("RepeatInstanceDates", aRepeat)
+	Call docCal1.ReplaceItemValue("RepeatStartDate", dtStart)
+	Call docCal1.ReplaceItemValue("RepeatUntil", vEndDate)
+	Call docCal1.ReplaceItemValue("_ViewIcon", 10)
+	Call docCal1.ReplaceItemValue("$CSFlags", "c")
+	Call docCal1.ReplaceItemValue("$CSVersion", "2")
+	Call docCal1.ReplaceItemValue("$PublicAccess", "1")
+	Call docCal1.ReplaceItemValue("$ExpandGroups", "3")
+	Call docCal1.ReplaceItemValue("$HFFlags", "1")
+	Call docCal1.ComputeWithForm(False, False)
+
+	Set rtBody1 = docCal1.CreateRichTextItem("Body")
+	Call rtBody1.AddNewLine(1)
+	Call rtBody1.AppendText(sCalTopic)
+	Call rtBody1.AddNewLine(1)
+
+	Forall itm In docCal1.Items
+		If (itm.Name Like "tmp*") Then
+			Call itm.Remove
+		End If
+	End Forall
+
+	Set aDocs(0) = docCal1
+
+	' create the data document
+	Set docCal2 = db.CreateDocument
+	docCal2.Subject = sCalSubject
+	docCal2.Form = "Appointment"
+	docCal2.Location = sCalLocation
+	docCal2.AppointmentType = "4"
+	docCal2.AppointmentType_us = "3"
+	docCal2.OrgRepeat = "1"
+	docCal2.OrgTable = "C0"
+	docCal2.Logo = "StdNotesLtr20"
+	docCal2.Repeats = "1"
+	docCal2.SEQUENCENUM = 1
+	docCal2.txtNum = nDates
+	docCal2.UpdateSeq = "1"
+	docCal2.dspNum = nDates
+	docCal2.dspStart = dtStart.DateOnly
+	docCal2.Principal = PathwayMail
+	docCal2.Chair = PathwayMail
+	Call docCal2.ReplaceItemValue("$NoPurge", dtEnd)
+	Call docCal2.ReplaceItemValue("StartDate", vStartDate)
+	Call docCal2.ReplaceItemValue("StartDateTime", aRepeat)
+	Call docCal2.ReplaceItemValue("StartTime", vStartTime)
+	Call docCal2.ReplaceItemValue("EndDate", vEndDate)
+	Call docCal2.ReplaceItemValue("EndDateTime", aRepeat)
+	Call docCal2.ReplaceItemValue("EndTime", vEndTime)
+	Call docCal2.ReplaceItemValue("CalendarDateTime", aRepeat)
+	Call docCal2.ReplaceItemValue("RepeatInstanceDates", aRepeat)
+	Call docCal2.ReplaceItemValue("ExcludeFromView", aExclude)
+	Call docCal2.ReplaceItemValue("lastDate", dtEnd)
+	Call docCal2.ReplaceItemValue("_ViewIcon", 10)
+	Call docCal2.ReplaceItemValue("$CSFlags", "i")
+	Call docCal2.ReplaceItemValue("$CSVersion", "2")
+	Call docCal2.ReplaceItemValue("$PublicAccess", "1")
+	Call docCal2.ReplaceItemValue("$ExpandGroups", "3")
+	Call docCal2.ReplaceItemValue("$HFFlags", "1")
+	Call docCal2.ReplaceItemValue("$RefOptions", "1")
+	Call docCal2.ReplaceItemValue("$AltPrincipal", PathwayMail)
+
+	Set rtBody2 = docCal2.CreateRichTextItem("Body")
+	Call rtBody2.AddNewLine(1)
+	Call rtBody2.AppendText(sCalTopic)
+	Call rtBody2.AddNewLine(1)
+
+	Call docCal2.ComputeWithForm(False, False)
+
+	Forall itm In docCal2.Items
+		If (itm.Name Like "tmp*") Then
+			Call itm.Remove
+		Else
+			If (Ucase$(itm.Name) Like "REPEAT*") Then
+				Select Case itm.Name
+				Case "RepeatInstanceDates", "Repeats"
+				Case Else
+					Call itm.Remove
+				End Select
+			End If
+		End If
+	End Forall
+
+	Set aDocs(1) = docCal2
+
+	PathwayCloseCalendar = aDocs
+
+Func_Exit:
+	Exit Function
+
+Func_Error:
+	Call AddToStackTrace()
+
+End Function

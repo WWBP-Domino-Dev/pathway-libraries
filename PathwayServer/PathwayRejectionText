@@ -1,0 +1,12 @@
+Sub PathwayRejectionText()
+	' Define text for response to obsolete template submission
+	templateWarning(0) = "As of "
+	templateWarning(1) = DATEVERSION
+	templateWarning(2) = " , the PATHway template you submitted has been revised.   " & _
+	"In the future, please use the version of the PATHway template which accompanies this email" & newLine & newLine
+	templateWarning(3) = "The new template will automatically be stored as Stationery, " & _
+	"available under Tools/New Memo - Using Stationery, once it's used for submission.  " & _
+	"Or, you can open the new template and click 'Save as Template'.  " & NEWLINE & NEWLINE
+	templateWarning(4) = "After each submission, a copy of the request will be stored in the Sent folder.  " & _
+	"This copy is just a graphic rendering of the template, so it can't be reused to resubmit the request"
+End Sub

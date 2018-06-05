@@ -1,0 +1,153 @@
+Sub PathwayCloseArrays (bDatePast As Boolean, nDays As Double, dtStart As NotesDateTime, dtEnd As NotesDateTime, aEngage List As Integer, aCal() As Variant)
+
+%REM
+Name:
+	PathwayCloseArrays
+
+Arguments:
+	bDatePast		flag indicating that engagement date is already past
+	nDays			number of funded days in the engagement
+	dtStart			start date of engagement
+	dtEnd				end date of engagement
+	aEngage			array of string values identifying the months in the engagement
+	aCal				array of variant date values identifying the dates of the calendar entries (bypassed if engagement has passed)
+
+Called By:
+	Subroutine PathwayCloseRequest
+
+Description:
+	Loop through the engagement time period creating arrays entries along the way.  aEngage entries will be created for each month
+	and will contain the number of engagement days in that month, i.e.  aEngage(2004/10) = 17.  aCal entries will be created either for
+	each day, if the engagement is only a week, or for each week in the engagement.   The aEngage array will be used later to generate
+	supplemental status documents and the sCal array will be used to generate calendar documents.
+
+History:
+
+%END REM
+
+	Dim dtRepeat As NotesDateTime
+
+	Dim sMonth As String
+	Dim sYear As String
+	Dim sKey As String
+
+	Dim i As Integer
+	Dim nX As Integer
+	Dim nLoopEnd As Integer
+
+	Dim bLimit As Boolean
+
+	Const Monday = 2
+	Const Friday = 6
+
+	On Error Goto Sub_Error
+
+	' keep track of days in the range which are week days.
+	' this will be the number of days which are funded
+	Set dtRepeat = New NotesDateTime(dtStart.DateOnly & " 08:00:00")
+
+	' if the engagement is over a week, only create calendar reminders weekly.  otherwise, create one every day.
+	If (nDays > 5) Then
+		nLoopEnd = 7
+	Else
+		nLoopEnd = 1
+	End If
+
+	If (dtRepeat.DateOnly = dtEnd.DateOnly) Then
+		' only one day for the engagement
+
+		' if the date hasn't past, create a single calendar entry
+		If Not (bDatePast) Then
+			Redim Preserve aCal(0)
+			aCal(0) = Cdat(dtRepeat.LSLocalTime)
+		End If
+
+		sMonth = Cstr(Month(dtRepeat.DateOnly))
+		If (Len(sMonth) < 2) Then
+			sMonth = "0" & sMonth
+		End If
+		sYear = Cstr(Year(dtRepeat.DateOnly))
+		aEngage(sYear & "/" & sMonth) = 1
+	Else
+		' multiple days in the engagement
+
+		' if the date hasn't past, start creating calendar entries
+		If Not (bDatePast) Then
+			nX = 0
+			bLimit = False
+			Redim Preserve aCal(nX)
+			aCal(nX) = Cdat(dtRepeat.LSLocalTime)
+		End If
+
+		sMonth = Cstr(Month(dtRepeat.DateOnly))
+		If (Len(sMonth) < 2) Then
+			sMonth = "0" & sMonth
+		End If
+		sYear = Cstr(Year(dtRepeat.DateOnly))
+
+		' build the array entries with key = "yyyy/mm"
+		sKey = sYear & "/" & sMonth
+		aEngage(sKey) = 1
+
+		Call pwayLog.LogAction("PathwayCloseArrays():   new array entry for " & sKey)
+
+		' loop until the starting date advances to the ending date
+		Do Until bLimit
+			' break out every reminder cycle
+			For i = 1 To nLoopEnd
+				Call dtRepeat.AdjustDay(1)
+				' Call pwayLog.LogAction("PathwayCloseArrays():   day increment to " & dtRepeat.DateOnly)
+
+				Select Case Weekday(dtRepeat.DateOnly)
+				Case Monday To Friday
+					sMonth = Cstr(Month(dtRepeat.DateOnly))
+					If (Len(sMonth) < 2) Then
+						sMonth = "0" & sMonth
+					End If
+					sYear = Cstr(Year(dtRepeat.DateOnly))
+
+					' build the array entries with key = "yyyy/mm"
+					sKey = sYear & "/" & sMonth
+					If Not (Iselement(aEngage(sKey))) Then
+						aEngage(sKey) = 1
+						Call pwayLog.LogAction("PathwayCloseArrays():   weekday, new array entry for " & sKey)
+					Else
+						aEngage(sKey) = aEngage(sKey) + 1
+						Call pwayLog.LogAction("PathwayCloseArrays():     weekday, increment array entry for " & sKey)
+					End If
+				End Select
+
+				' 12/05/2003
+				' fixed the date test
+				If (dtRepeat.TimeDifference(dtEnd) >= 0) Then
+					bLimit = True
+					Call pwayLog.LogAction("PathwayCloseArrays():   Finished")
+					Exit For
+				End If
+			Next
+
+			' add to the array of calendar dates
+			If Not (bDatePast) Then
+				Select Case Weekday(dtRepeat.DateOnly)
+				Case Monday To Friday
+					nX = nX + 1
+					Redim Preserve aCal(nX)
+					aCal(nX) = Cdat(dtRepeat.LSLocalTime)
+				End Select
+			End If
+
+		Loop
+	End If
+
+	Call pwayLog.LogAction("PathwayCloseArrays():   Show monthly totals:")
+	Forall days In aEngage
+		Call pwayLog.LogAction("PathwayCloseArrays():     " & Listtag(days) & " - " & days)
+	End Forall
+
+Sub_Exit:
+	Exit Sub
+
+Sub_Error:
+	Call AddToStackTrace()
+
+End Sub

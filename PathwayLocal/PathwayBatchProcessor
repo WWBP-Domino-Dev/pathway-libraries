@@ -1,0 +1,661 @@
+Sub PathwayBatchProcessor
+
+%REM
+Name
+	PathwayBatchProcessor
+
+Description
+	Some teams satisfy requests on their own that are then tracked in PATHway.  They will send in an Excel spreadsheet
+	with entries describing each request.  This routine will build closed requests from that spreadsheet.
+
+	Critical variables:
+		List colRef:			Maps a PATHway field name to a specific column
+		List editRef:			List of fields names and their editing requirements.  "O" = optional, "R" = required
+		Array convertRef:	Array fields which are normally optional but which may be reguired depending on another field
+
+	Edit all of the columns for data, and check format of engagement date value
+	Create status documents using provided values.  Some values normally entered at close time will have default values
+	If user selected 'commit', save the new status documents
+
+%END REM
+
+	Dim uiDB As NotesUIDatabase
+	Dim view As NotesView
+	Dim docStatus As NotesDocument
+	Dim docStatusMonth As NotesDocument
+	Dim docProfile As NotesDocument
+	Dim docNotify As NotesDocument
+	Dim dtStart As NotesDateTime
+	Dim dtEnd As NotesDateTime
+	Dim dtTemp As NotesDateTime
+	Dim processLog As NotesLog
+	Dim lockObj As New DocumentLock
+	Dim rtBody As NotesRichTextItem
+	Dim vw As NotesView
+
+	Dim ExcelApp As Variant
+	Dim xlWorkbook As Variant
+	Dim xlSheet As Variant
+
+	Dim colRef List As String
+	Dim editRef List As String
+	Dim convertRef List As String
+
+	Dim sYR As String
+	Dim sMN As String
+	Dim sErr As String
+	Dim sText As String
+	Dim sPrintNames As String
+	Dim sExtract As String
+	Dim sUnid As String
+	Dim fieldName As String
+	Dim aISV(1) As String
+	Dim aProd() As String
+	Dim aProdCol(1 To 5) As String
+	Dim sErrors() As String
+	Dim sErrMsg As String
+
+	' 1/14/2009 - added HELPCOL
+	' 5/14/2009 - added PRODCOL
+	Dim HELPCOL As String
+	Dim DATECOL As String
+	Dim INCRCOL As String
+	Dim REVCOL As String
+	Dim REVAMTCOL As String
+	Dim COSTAMTCOL As String
+	Dim PRODCOL As String
+
+	Dim nReq As Integer
+	Dim nRow As Long
+	Dim nCol As Integer
+	Dim nX As Integer
+	Dim nY As Integer
+	Dim nConvert As Integer
+	Dim aEngDates List As Integer
+	Dim nHours As Integer
+	Dim nDays As Double
+	Dim nDaysFunded As Double
+	Dim nRate As Double
+	Dim nFunding As Long
+	Dim nWeeks As Double
+	Dim yearPrior As Integer
+	Dim yearNext As Integer
+	Dim index As Integer
+	Dim nRevAmount As Long
+	Dim nCostAmount As Long
+	Dim nProfitAmount As Long
+	Dim dRevPercent As Double
+
+	Dim fileSelect As Variant
+	Dim aRepeat() As Variant
+	Dim chkDate As Variant
+
+	Dim bDatePast As Boolean
+	Dim bUpdateOK As Boolean
+	Dim bValidating As Boolean
+	Dim bEditFailure As Boolean
+	Dim bCommit As Boolean
+	Dim bFee As Boolean
+
+	Const H = "Hours"
+	Const D = "Days"
+	Const W = "Weeks"
+	Const M = "Months"
+	Const Y = "Years"
+
+	Const REVFEE = "Fee"
+	Const EOD = "**END**"
+	Const DEFTAM = "Debbie Nurkin"
+	Const DEFADDR = "pathway@us.ibm.com"
+
+	' 1/14/2009 - Column X now set to PWayEduCount, PWayDesc moved to column Y
+	' 5/14/2009:
+	'	PWayPlayNum inserted into column C
+	'	Columns C - W moved forward one column
+	'	PWayEduCategory inserted into column Y
+	'	PWayEduRLevel inserted into column Z
+	'	Columns Y and Z moved two columns to AA and AB
+	colRef("PWayTAM") = "B"
+	colRef("PWayPlayNum") = "C"
+	colRef("PWaySponsor") = "D"
+	colRef("PWayRRType") = "E"
+	colRef("PWayDeliver") = "F"
+	colRef("PWayEngPhase") = "G"
+	colRef("PWayHelp") = "H"
+	colRef("PWayISV") = "I"
+	colRef("PWayPartnerType") = "J"
+	colRef("PWayNeeded") = "K"
+	colRef("PWayDuration") = "L"
+	colRef("PWayDurationType") = "M"
+	colRef("PWayGEO") = "N"
+	colRef("PWayResProvider") = "O"
+	colRef("PWayResName") = "P"
+	colRef("PWayUtilize") = "Q"
+	colRef("PWayProd") = "R"
+	colRef("PWayRevenue") = "S"
+	colRef("PWayRevSource") = "T"
+	colRef("PWayCostAmt") = "U"
+	colRef("PWayRevAmt") = "V"
+	colRef("PWayGraduated") = "W"
+	colRef("PWaySiebelNum") = "X"
+	'colRef("PWayEduCategory") = "Y"
+	'colRef("PWayEduRLevel") = "Z"
+	'colRef("PWayEduCount") = "AA"
+	colRef("PWayDesc") = "AG"
+
+%REM
+	June 12, 2009
+
+	Proposed layout to handle multiple products
+	columns AB - AF are now extra columns for entering additional products
+%END REM
+
+	aProdCol(1) = "AB"
+	aProdCol(2) = "AC"
+	aProdCol(3) = "AD"
+	aProdCol(4) = "AE"
+	aProdCol(5) = "AF"
+
+	' 1/14/2009 - added entry for PWayEduCount
+	'	this required the addition of code to reinitialize PWayEduCount
+	' 5/14/2009 - added three entries for PWayPlayNum, PWayEduCategory and PWayRLevel
+	editRef("PWayRRType") = "R"
+	editRef("PWayPlayNum") = "O"
+	editRef("PWayDeliver") = "R"
+	editRef("PWayEngPhase") = "R"
+	editRef("PWayHelp") = "R"
+	editRef("PWayISV") = "R"
+	editRef("PWayPartnerType") = "R"
+	editRef("PWayNeeded") = "R"
+	editRef("PWayDuration") = "R"
+	editRef("PWayDurationType") = "R"
+	editRef("PWayResProvider") = "R"
+	editRef("PWayResName") = "R"
+	editRef("PWayUtilize") = "R"
+	editRef("PWayProd") = "R"
+	editRef("PWayRevenue") = "R"
+	editRef("PWayRevSource") = "O"
+	editRef("PWayCostAmt") = "O"
+	editRef("PWayRevAmt") = "O"
+	editRef("PWaySponsor") = "O"
+	editRef("PWayTAM") = "R"
+	editRef("PWayGEO") = "R"
+	editRef("PWayGraduated") = "O"
+	editRef("PWaySiebelNum") = "O"
+	'editRef("PWayEduCategory") = "O"
+	'editRef("PWayEduRLevel") = "O"
+	editRef("PWayEduCount") = "O"
+	editRef("PWayDesc") = "O"
+
+	' 1/14/2009 - added HELPCOL
+	DATECOL = colRef("PWayNeeded")
+	HELPCOL = colRef("PWayHelp")
+	INCRCOL = colRef("PWayDurationType")
+	REVCOL = colRef("PWayRevenue")
+	REVAMTCOL = colRef("PWayRevAmt")
+	COSTAMTCOL = colRef("PWayCostAmt")
+	PRODCOL = colRef("PWayProd")
+
+	' this list is used to reinitialize certain editRef values for each loop iteration
+	convertRef(1) = "PWayRevSource"
+	convertRef(2) = "PWayCostAmt"
+	convertRef(3) = "PWayRevAmt"
+
+	Redim sErrors(0)
+	sErrors(0) = "------------------"
+
+	On Error Goto SubError
+
+	Set session = New NotesSession
+	Set ws = New NotesUIWorkspace
+	Stop
+
+	' initialize the log file
+	Set stream = session.CreateStream
+	Call stream.Open(debugFile, "ASCII")
+	If (stream.Bytes > LOGLIMIT) Then
+		Call stream.Truncate
+	End If
+	Call stream.WriteText(SEP, EOL_CRLF)
+	Call stream.Close
+
+	Set pwayLog = New NotesLog("PATHway Batch Create Log")
+	Call pwayLog.OpenFileLog(debugFile)
+	Call pwayLog.LogAction("PathwayBatchProcessor()")
+
+	bCommit = ws.Prompt(PROMPT_YESNO, "PATHway Batch Processor", "Do you want to commit the additions?")
+
+	' prompt for location of input file
+	fileSelect = ws.OpenFileDialog(False, "", "Microsoft Excel Workbook|*.xls")
+	If (Isempty(fileSelect)) Then
+		Exit Sub
+	End If
+	Sleep 2
+
+	' open mail log for sending process log to user
+	Set processLog = New NotesLog("PATHway Batch Processor")
+	Call processLog.OpenMailLog(session.UserName,"PATHway Batch Processor results")
+
+	' lock the global profile doc for creation of new RR numbers
+	Set view = dbServer.GetView("Pathway Global Profile")
+	Set docProfile = view.GetFirstDocument
+	If (docProfile Is Nothing) Then
+		Error ERR_PROFILE_MISSING, MSG_PROFILE_MISSING
+	End If
+
+	' lock it from other users
+	Call lockObj.lockDocuments(docProfile)
+
+	' load the current global RR value
+	nReq = docProfile.GetFirstItem(f_CNTR).Text
+
+	' load the current funding rate
+	nRate = docProfile.GetItemValue(f_PWRATE)(0)
+
+	' create Excel workbook object
+	Print "Opening Excel"
+	Set ExcelApp = CreateObject("Excel.Application")
+	ExcelApp.Visible = False
+	ExcelApp.Workbooks.Open fileSelect(0)
+	Set xlWorkbook = ExcelApp.ActiveWorkbook
+	Set xlSheet = xlWorkbook.ActiveSheet
+
+	Call pwayLog.LogAction("Column Configuration:")
+	Forall rowlbl In colRef
+		sText = Listtag(rowlbl)
+		Call pwayLog.LogAction(sText & " is in column " & rowlbl)
+	End Forall
+
+	' process each row, starting with row 5.
+	nRow = 5
+	Do Until xlSheet.Cells(nRow, 1).value = EOD
+
+		Call pwayLog.LogAction("Starting row " & Cstr(nRow))
+		bEditFailure = False
+
+		' make sure there's something to look at
+		If (xlSheet.Cells(nRow, "B").Value = "") Then
+			Goto NextRow
+		End If
+
+		Print "Processing row " & nRow
+		Call processLog.LogAction("Row " & nRow & " start processing")
+
+		' reinitialize the Fee/Free cells which could change their requirement state
+		Forall revField In convertRef
+			editRef(revField) = "O"
+		End Forall
+
+		' reinitialize the count field which can change based on the Engagement Type value
+		' 2016-03-14: removed education fields
+		'editRef("PWayEduCount") = "O"
+
+		' if the Revenue field is "Fee", its fields must now be required
+		bFee = False
+		If (xlSheet.Cells(nRow, REVCOL).Value = REVFEE) Then
+			Call pwayLog.LogAction("  converting Revenue cells to 'Required'")
+			bFee = True
+			Forall revField In convertRef
+				editRef(revField) = "R"
+			End Forall
+		End If
+
+		' 2009-1-14
+		' 2016-3-14: removed education fields
+		' if Engagement Type is Training, the new student count column must be entered
+		'If (xlSheet.Cells(nRow, HELPCOL).Value Like "*Training*") Then
+		'	editRef("PWayEduCount") = "R"
+		'End If
+
+		' first verify that all required cells were entered
+		Forall columnID In colRef
+			fieldName = Listtag(columnID)
+			If (editRef(fieldname) = "R") Then
+				If (Len(xlSheet.Cells(nRow, columnID).Value) = 0) Then
+					bEditFailure = True
+					index = index + 1
+					Redim Preserve sErrors(index)
+					sErrors(index) = "Row " & nRow & ": " & " column " & columnID & " is required but is empty"
+					Call pwayLog.LogAction(sErrors(index))
+				End If
+			End If
+		End Forall
+		If (bEditFailure) Then Goto NextRow
+
+		' see if the date even looks like a date
+		If (Not Isdate(xlSheet.Cells(nRow, DATECOL).Value)) Then
+			bEditFailure = True
+			index = index + 1
+			Redim Preserve sErrors(index)
+			sErrors(index) = "Row " & nRow & ": " & "had an invalid Engagement Date"
+			Call pwayLog.LogAction(sErrors(index))
+			Goto NextRow
+		End If
+
+		chkDate = Datevalue(xlSheet.Cells(nRow, DATECOL).Value)
+		yearPrior = Year(chkDate) - 1
+		yearNext = Year(chkDate) + 1
+		If (Year(chkDate) < yearPrior Or Year(chkDate) > yearNext) Then
+			bEditFailure = True
+			Call processLog.LogAction("Row " & nRow & ": " & "Date value has an invalid year")
+		End If
+		If (Month(chkDate) < 1 Or Month(chkDate) > 12) Then
+			bEditFailure = True
+			Call processLog.LogAction("Row " & nRow & ": " & "Date value has an invalid month")
+		End If
+		If (Day(chkDate) < 1 Or Day(chkDate) > 31) Then
+			bEditFailure = True
+			Call processLog.LogAction("Row " & nRow & ": " & "Date value has an invalid day")
+		End If
+		If (bEditFailure) Then
+			index = index + 1
+			Redim Preserve sErrors(index)
+			sErrors(index) = "Row " & Cstr(nrow) & " had an invalid Engagement Date"
+			Call pwayLog.LogAction(sErrors(index))
+			Goto NextRow
+		End If
+
+		' if this is a Fee engagement, calculate the profit amount from the cost and revenue values
+		If (bFee) Then
+			nRevAmount = Clng(xlSheet.Cells(nRow, REVAMTCOL).Value)
+			nCostAmount = Clng(xlSheet.Cells(nRow, COSTAMTCOL).Value)
+			nProfitAmount = nRevAmount - nCostAmount
+			dRevPercent = nProfitAmount / nRevAmount
+		End If
+
+		' create and initialize status document
+		Set docStatus = New NotesDocument(dbServer)
+
+		' copy each spreadsheet cell to the Status doc
+		Forall columnID In colRef
+			fieldName = Listtag(columnID)
+			sText = xlSheet.Cells(nRow, columnID).Value
+			If (fieldName = "PWayDuration") Then
+				sText = Cstr(Round(sText, 0))
+				Call docStatus.ReplaceItemValue(fieldName, sText)
+			Else
+				' some fields might have aliases, which should be extracted and used
+				sText = xlSheet.Cells(nRow, columnID).Value
+				If (Instr(sText, "|") > 0) Then
+					sText = Fulltrim(Strright(sText, "|"))
+				End If
+				Call docStatus.ReplaceItemValue(fieldName, sText)
+			End If
+		End Forall
+
+		' 5/14/2009 - multiple products are now allowed on the request template.  Create an array with the default product cell as the first entry.
+		Redim Preserve aProd(0)
+		aProd(0) = xlSheet.Cells(nRow, PRODCOL).Value
+
+		' loop through the additional product columns looking for a non-empty cell.  append to array if found.
+		For nX = 1 To 5
+			sText = xlSheet.Cells(nRow, aProdCol(nX)).Value
+			If (Len(sText) > 0) Then
+				Redim Preserve aProd(nX)
+				aProd(nX) = sText
+			End If
+		Next
+
+		' 5/14/2009 - replace the spreadsheet cell value with the generated array to support multiple products.  If there are no additional products
+		'					the array will only contain the default product cell.
+		Call docStatus.RemoveItem("PWayProd")
+		Call docStatus.ReplaceItemValue("PWayProd", aProd)
+
+		' update the calculated revenue values
+		If (bFee) Then
+			Call docStatus.ReplaceItemValue("PWayProfitAmt", nProfitAmount)
+			Call docStatus.ReplaceItemValue("PWayProfitPct", dRevPercent)
+		End If
+
+		' the spreadsheet will have "Yes" as the value for the PWayGraduated field.  Normally the template will convert that to the alias value of "1"
+		' if this field was coded, convert it to its expected alias.
+		If (docStatus.HasItem("PWayGraduated")) Then
+			If (Ucase(docStatus.GetFirstItem("PWayGraduated").Text) = "YES") Then
+				Call docStatus.ReplaceItemValue("PWayGraduated", "1")
+			End If
+		End If
+
+		' call routine to edit the values
+		sErr = PathwayCloseEditing(docStatus, True)
+		If (sErr <> "") Then
+			bEditFailure = True
+			Call processLog.LogAction("Row " & nRow & ": " & "editing failures ")
+			Call processLog.LogAction(sErr)
+			Call pwayLog.LogAction("Row " & nRow & ": " & sErr)
+			index = index + 1
+			Redim Preserve sErrors(index)
+			sErrors(index) = sErr
+			Goto NextRow
+		End If
+
+		' now increment RR value
+		nReq = nReq + 1
+		Call pwayLog.LogAction("  incremented request # to " & nReq)
+
+		' only do actual processing of cells if the additions are being committed
+
+		' load fields with default values
+		If (bCommit) Then
+			Call docStatus.AppendItemValue("Form", f_DATA)
+			Call docStatus.ReplaceItemValue("SaveOptions", "0")
+			Call docStatus.ReplaceItemValue(f_PWID, nReq)
+			Call docStatus.ReplaceItemValue(f_PWCLSTAT, "Fulfilled by PATHway")
+			Call docStatus.ReplaceItemValue(f_PWPRI, "Normal")
+
+			' 6/15/2010: no need for the PW Owner field
+			' Call docStatus.ReplaceItemValue(f_PWOWN, "Mindy Kubis")
+			Call docStatus.ReplaceItemValue(f_PWADDR, DEFADDR)
+			Call docStatus.ReplaceItemValue(f_PWRESADDR, "<Default Address>")
+
+		' the requestor may not have been entered, so enter default value if not
+			If (docStatus.GetItemValue(f_PWTAM)(0) = "") Then
+				Call docStatus.ReplaceItemValue(f_PWTAM, DEFTAM)
+			End If
+
+			Call docStatus.ReplaceItemValue("Subject", "Status Document for RR " & nReq)
+
+		' flag this document as closed for view inclusion
+			Call docStatus.ReplaceItemValue(f_PWCLOSE, "1")
+
+		' all the dates can be the same, the engagement date from the spreadsheet.
+		' force the date to only include a Date value
+			Set dtEnd = New NotesDateTime(docStatus.GetFirstItem(f_PWDATE).Text)
+			Set dtTemp = New NotesDateTime(dtEnd.DateOnly)
+			Set dtEnd = Nothing
+			Set dtStart = New NotesDateTime(dtTemp.DateOnly)
+			Set dtEnd = New NotesDateTime(dtTemp.DateOnly)
+
+		' set the various reporting dates = to the engagement date
+			Call docStatus.ReplaceItemValue(f_PWDATE, dtTemp)
+			Call docStatus.ReplaceItemValue(f_PWOPENDT, dtTemp)
+			Call docStatus.ReplaceItemValue(f_PWCLOSEDT, dtTemp)
+			Call docStatus.ReplaceItemValue("PostedDate", dtTemp)
+			Call pwayLog.LogAction("set dates to " & dtTemp.DateOnly)
+
+		' the date will always be in the past
+			bDatePast = True
+
+		' calculate the number of business days in the engagement and adjust the end date
+		'nDaysFunded = PathwayCloseCount(docStatus, dtEnd)
+			nDaysFunded = PathwayCalcDuration(docStatus.GetItemValue("PWayDuration")(0), docStatus.GetItemValue("PWayDurationType")(0), dtEnd)
+
+		' 9/6/2007: the returned value can now be a fractional value, where the fixed portion
+		' is the days and the fraction is the hours.  separate now for continued processing.
+			nHours = Fraction(nDaysFunded) * 8
+			nDaysFunded = Fix(nDaysFunded)
+
+		' update the end date in case parameters changed
+			Call docStatus.ReplaceItemValue("PWayEndNeeded", dtEnd)
+			Call pwayLog.LogAction("set end-needed date to " & dtEnd.DateOnly)
+
+		' create arrays which will map to engagement months and repeating calendar documents
+			Erase aEngDates
+			Call PathwayCloseArrays(bDatePast, nDaysFunded, dtStart, dtEnd, aEngDates, aRepeat)
+
+		' 8/28/2008
+		' apply utilization ratios and additional providers to the funding totals: weeks, days, hours, cost,...
+			If (nDaysFunded > 0) Then
+				Call PathwayCloseAllocProviders(docStatus, aEngDates, Cint(nDaysFunded))
+			End If
+
+		' save the total days in the engagement, modified by utilization factors and additional resources
+			Call docStatus.ReplaceItemValue(f_PWDAYS, nDaysFunded)
+			Call docStatus.ReplaceItemValue(f_PWHOURS, nHours)
+			Call pwayLog.LogAction("Days and Hours funded: " & Cstr(nDaysFunded) & ", " & Cstr(nHours))
+
+		' calculate the funding total using the default rate.  includes utilization ratios and additional providers
+			nFunding = PathwayReqValue(docStatus, nDaysFunded, nHours, nRate)
+			Call docStatus.ReplaceItemValue(f_PWCOST, nFunding)
+			Call docStatus.ReplaceItemValue("PWayCalcCost", nFunding)
+			Call pwayLog.LogAction("Total funded cost: " & Cstr(nFunding))
+
+		' calculate the total funding hours.  includes utilization ratios and additional providers
+			nFunding = PathwayReqValue(docStatus, nDaysFunded, nHours, 1)
+			Call docStatus.ReplaceItemValue(f_PWBASE, nFunding)
+			Call pwayLog.LogAction("Total funded hours: " & Cstr(nFunding))
+
+		' convert the total funding hours to business weeks.
+		' 8 hours per day, 5 days per week.
+			nWeeks = (nFunding / 8) / 5
+			nWeeks = Round(nWeeks, 1)
+			Call docStatus.ReplaceItemValue("PWayCalcWeeks", nWeeks)
+			Call pwayLog.LogAction("Total weeks: " & Cstr(nWeeks))
+		End If
+
+%REM
+currRate := @ToNumber(@DbColumn("Notes":"NoCache"; ""; "Pathway Global Profile"; 2));
+tempBase := @If(@IsAvailable(PWayCalcBase); @ToNumber(PWayCalcBase); 0);
+tempCalc := currRate * tempBase;
+showAmt := @If(PWayResFunding = "Yes"; PWayFundAmt; tempCalc);
+@If(@IsAvailable(PWayEngDate); 0; @ToNumber(showAmt))
+
+		' set any computed fields before completion
+		If (Not docStatus.ComputeWithForm(True, False)) Then
+			Call pwayLog.LogAction("PathwayBatchProcessor: ComputeWithForm failed.")
+		End If
+%END REM
+
+		' test the success of the status document save.  only if it's successful should the associated documents be saved.
+		' only save if the user responded YES to the commit prompt
+		If (bCommit) Then
+			Print "Saving status doc for row " & nRow & " ..."
+
+			If (docStatus.Save(True, True, True)) Then
+				Call pwayLog.LogAction("  saved status doc")
+
+				bUpdateOK = True
+
+				' a special status document will be created for each month in the engagement.  they will be distinguished
+				' from normal status documents in views by the presence of field PWayEngDate
+				Forall byMonth In aEngDates
+					' get the date covered by this document
+					sText = Listtag(byMonth)
+
+					' create the status doc, copying all fields from the main document and adding the extra fields
+					Set docStatusMonth = db.CreateDocument
+					Call docStatus.CopyAllItems(docStatusMonth)
+					Call docStatusMonth.AppendItemValue(f_PWDATES, sText)
+					Call docStatusMonth.ReplaceItemValue(f_PWDAYS, byMonth)
+
+					' remove logging fields, only need to keep in main version of status doc
+					Call docStatusMonth.RemoveItem(f_PWREQ)
+
+					Call docStatusMonth.ComputeWithForm(False, False)
+					Call docStatusMonth.Save(True, True, True)
+
+					Call pwayLog.LogAction("  Monthly status doc for " & sText)
+				End Forall
+
+				' update notify log
+				Call processLog.LogAction("  Row " & nRow & " successfully processed, new RR # is " & Cstr(nReq))
+			End If
+		End If
+
+NextRow:
+		If (bEditFailure) Then
+			Call processLog.LogAction("  * * * Row " & nRow & " was not saved due to errors")
+		End If
+		Call pwayLog.LogAction("=========")
+		nRow = nRow + 1
+	Loop
+
+	' after all the status docs are saved then update the global profile doc with the latest request id
+	If (bCommit) Then
+		' update global profile doc with current RR value
+		Call docProfile.ReplaceItemValue(f_CNTR, nReq)
+		If (docProfile.Save(True, False)) Then
+			Call pwayLog.LogAction("  successfully update profile doc with request " & nReq)
+		End If
+	End If
+
+SubExit:
+	Print "Cleaning up"
+
+	Call ExcelApp.Application.Quit
+	Set ExcelApp = Nothing
+
+	Call pwayLog.LogAction("Excel was closed, now send summary email to user.")
+
+	' send mail with log of process
+	Call processLog.Close
+
+	Call pwayLog.LogAction("Release the profile document")
+
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.releaseDocuments(False)
+	End If
+
+	' if process completed normally, a couple of more tasks to do
+	If (bUpdateOK) Then
+		' if running on a local replica, try to replicate to pick up the new documents
+		If (db.Server = "" And foundServer) Then
+			db.Replicate(serverName)
+		End If
+
+		Call ws.ViewRefresh
+	End If
+
+	If (index > 0) Then
+		Forall entry In sErrors
+			sErrMsg = sErrMsg & entry & Chr(13)
+		End Forall
+		Msgbox sErrMsg, 48, "Errors encountered in batch process"
+	Else
+		Msgbox "No editing errors were encountered", 48, "PATHway Batch Processor"
+	End If
+
+	Call pwayLog.LogAction("Processing complete." & Chr(13) & "_______________________________________")
+	If (Not pwayLog Is Nothing) Then
+		Call pwayLog.Close
+	End If
+
+	Print ""
+	Exit Sub
+
+SubError:
+	If (Err = ERR_CANCEL) Then
+		Resume SubExit
+	End If
+
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.restoreDocuments
+	End If
+
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.releaseDocuments(False)
+	End If
+
+	' end Excel process
+	Call ExcelApp.Application.Quit
+	Set ExcelApp = Nothing
+
+	' send mail with log of process
+	Call processLog.Close
+
+	Call LogEvent("Failure with row " & nRow, SEVERITY_LOW, Nothing)
+	If (Err = 213 And nRow > 65000) Then
+		Call LogEvent("Spreadsheet may be missing termination cell " & nRow, SEVERITY_LOW, Nothing)
+	End If
+	Call AddToStackTrace()
+
+End Sub

@@ -1,0 +1,11 @@
+Dim pwayLog As NotesLog
+Dim debugFile As String
+Dim stream As NotesStream
+Dim csvStream As NotesStream
+Dim fileNum As Integer
+
+Const newLine = {
+}
+Const WINFILE = "C:\Temp\PATHway_Debug.txt"
+Const UNIXFILE = "/tmp/PATHway_Debug.txt"
+Const LOGLIMIT = 2000000

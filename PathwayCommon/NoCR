@@ -1,0 +1,13 @@
+Private Function NoCR(s As String) As String
+
+	' remove all CR characters (hex 0D) from a string.
+	Dim pos As Long
+
+	NoCR = s
+	pos = Instr(NoCR, Chr$(13))
+	Do While pos > 0
+		NoCR = Left$(NoCR, pos-1) & Mid$(NoCR, pos+1)
+		pos = Instr(NoCR, Chr$(13))
+	Loop
+
+End Function

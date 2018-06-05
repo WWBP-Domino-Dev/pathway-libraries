@@ -1,0 +1,97 @@
+Sub Initialize
+	Dim dtRR As NotesDateTime
+	Dim docProf As NotesDocument
+	Dim sDay As String
+	Dim x As Integer
+	Dim isTest As Boolean
+	Dim onServer As Boolean
+
+	Stop
+
+	' define global session object
+	If (session Is Nothing) Then
+		Set session = New NotesSession
+	End If
+
+	' if running on client, define global workspace object
+	If Not (session.IsOnServer) Then
+		Set ws = New NotesUIWorkspace
+	End If
+
+	' point to the appropriate server
+	If (session.CurrentDatabase.FileName Like "*test*") Then
+		isTest = True
+		serverName = TestServer
+		serverPath = TestPath & TestFile
+	Else
+		isTest = False
+		serverName = ProdServer
+		serverPath = ProdPath & ProdFile
+	End If
+
+	Set db = session.CurrentDatabase
+	' various routines will access the documents on the server replica
+	If (db.Server = "") Then
+		onServer = False
+		Set dbServer = New NotesDatabase(serverName, serverPath)
+	Else
+		onServer = True
+		Set dbServer = db
+	End If
+
+	' be optimistic
+	foundServer = True
+
+	' check that the server copy is accessible
+	If (Not dbServer.IsOpen) Then
+
+		' it's not, so try with the backup server
+		If (serverName = ProdServer)	 Then
+			serverName = ProdServerBackup & ProdFile
+		Else
+			serverName = TestServerBackup & TestFile
+		End If
+		Set dbServer = New NotesDatabase(serverName, serverPath)
+
+		' check again for accessibility
+		If (Not dbServer.IsOpen) Then
+			foundServer = False
+			If (isTest) Then
+				' if it's the test server, just pretend
+				Set dbServer = db
+			Else
+				' for production, really don't want to get out of synch
+				Error 30990, "Cannot open production server"
+			End If
+		End If
+	End If
+
+
+	' extract the signature text from the Calendar Profile document
+	Set docProf = db.GetProfileDocument("CalendarProfile")
+	sDBsignature = docProf.GetFirstItem("Signature").Text
+	Set docProf = Nothing
+
+	Set rsRed = session.CreateRichTextStyle
+	rsRed.Bold = False
+	rsRed.NotesColor = COLOR_RED
+	Set rsBold = session.CreateRichTextStyle
+	rsBold.Bold = True
+	rsBold.NotesColor = COLOR_BLACK
+	Set rsNormal = session.CreateRichTextStyle
+	rsNormal.Bold = False
+	rsNormal.NotesColor = COLOR_BLACK
+
+	' Define text for response to automatic status request
+%REM
+	Feb 12, 2008: disabled this code pending code review
+	statusText(0) = "This is an automated response to your inquiry about the status of this Resource Request (RR ["
+	statusText(1) = "]). If you have any concerns, would like to raise the focus/priority on this request " & _
+	"or require the most up-to-date status, please email WebSphere PATHway (pathway@us.ibm.com | WebSphere Pathway/Pittsburgh/IBM), " & _
+	" using the latest copy you have of your request thread, or contact Mindy Cafaro/Pittsburgh/IBM (412.667.3771 | T/L 989.3771) " & _
+	"or Anne Jane Gray/Pittsburgh/IBM (412.667.4389 | T/L: 989.4389)."
+	statusText(2) = "The most of up-to-date status available for your request is:"
+	statusText(3) = "The status history for your request is:"
+%END REM
+
+End Sub

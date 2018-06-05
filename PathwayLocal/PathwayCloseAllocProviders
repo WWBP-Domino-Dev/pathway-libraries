@@ -1,0 +1,219 @@
+Sub PathwayCloseAllocProviders (docStatus As NotesDocument, aMonthly List As Integer, nDays As Integer)
+
+%REM
+Name:
+	PathwayCloseAllocProviders
+
+Arguments:
+	docStatus	selected Memo or Reply document from the Inbox
+	aMonthly	a list array containing the number of days in each month of the engagement
+	nDays		# of business days in the engagement: (<end date> - <start date>)
+	logger		pointer to Notes log object
+
+Called By:
+	Library routines
+		PathwayCloseRequest
+		PathwayBatchProcessor
+
+Description:
+	The aMonthly( ) list array contains an entry for each month in the emgagement.  The key identifies the month,
+	as Integer "09/2004", and the value is the number of days in that month.  The nDays value is the sum of those
+	monthly values.  It only shows the days assigned to the primary provider resource, it doesn't take into account
+	the utilization factor or additional resources which may have been assigned.
+
+	Start by converting the utilization factor to a non-null value.  Then check for additional resources and make sure
+	their utilization factors are also non-null.
+
+	Loop through the aMonthly( ) entries
+		calculate the ratio of this month to the total (<month's days> / <total days>).  this value will be used to parcel out
+		days assigned to the additional resources
+
+		modify the month's days by the utilization factor.  if none was entered it will default to 100%
+
+		for each additional resource specified, calculate the days for this month and add to the monthly value:
+		x = ((<resource days entered> * <allocation ratio>) * utilization factor).  Keep a running total to make sure
+		rounding doesn't over-allocation.
+
+		if resource was assigned 10 days with a utilization factor of 50% (they worked 1/2 of each of those 10 days),
+		and this month was 30% of the total engagement, then the equation is:
+		x = ((10 * .3) * .5) = 1.5 = 2 (only integers)
+
+		Add the new monthly value, which could have been unchanged), to a total for the current year.  When a month
+		is the first for a specific year, check that an MRA document exists.  Set an error flag if it doesn't.
+	End Loop
+
+	Exit now if the MRA document is missing
+
+	Loop through the yearly total entries
+
+%END REM
+
+	Dim docStat As NotesDocument
+	Dim dtTemp As NotesDateTime
+
+	Dim key As String
+	Dim sTmp As String
+	Dim sDays As String
+	Dim sYear As String
+	Dim sErrTxt As String
+	Dim sReqID As String
+	Dim sReqRes List  As String		' set of Additional Resource fields
+	Dim nReqResCnt List As Integer	' set of days_used values for Additional Resources
+	Dim nReqResFac List As Double	' set of utilization factors for Additional Resources
+	Dim nYearDays List As Integer		' set of days used for each year
+
+	Dim aLog() As String
+	Dim aViewSearch(1) As String
+	Dim aResource List As String
+	Dim aResourceYear List As String
+
+	Dim x, y As Integer
+	Dim nType As Integer
+	Dim nCurrDays As Integer
+	Dim nTempTotal As Integer
+	Dim nDaysPartial As Integer
+
+	Dim nCurrFunded As Integer
+	Dim nTempExtra As Integer
+	Dim nCurrExtra List As Integer
+
+	Dim nL As Long
+	Dim nResFactor As Double
+	Dim nRatio As Double
+
+	Const PCT = 0.01
+
+	On Error Goto Sub_Error
+
+	Stop
+
+	' 9/17/2007: following should probably be deleted
+	'nType = Datatype(logger)
+
+	' load fixed fields from the status document
+	'	ISV name
+	'	Provider's utilization factor
+	'	Additional Resource #2
+	'	Additional Resource #3
+	aViewSearch(1) = docStatus.GetItemValue(f_PWISV)(0)
+
+	If (Instr(aViewSearch(1), "(") > 0) Then
+		Error ERR_CANCEL, MSG_CANCEL
+	End If
+
+	Call pwayLog.LogAction("PathwayCloseAllocProviders():")
+
+	If (docStatus.GetFirstItem("PWayUtilize").Text = "") Then
+		Call docStatus.ReplaceItemValue("PWayUtilize", "100")
+	End If
+	nResFactor = Cdbl(docStatus.GetItemValue("PWayUtilize")(0)) * PCT
+
+	sReqRes(2) = docStatus.GetItemValue("PWayResProvider2")(0)
+	sReqRes(3) = docStatus.GetItemValue("PWayResProvider3")(0)
+
+	' if 2nd resource used, calculate the days used:
+	'	<days entered> * <utilization percentage>
+	If (sReqRes(2) <> "") Then
+		' first make sure there's a value
+		If (docStatus.GetFirstItem("PWayUtilize2").Text = "") Then
+			Call docStatus.ReplaceItemValue("PWayUtilize2", "100")
+		End If
+
+		Call pwayLog.LogAction("PathwayCloseAllocProviders(): get funded days for second provider" & Chr(13))
+
+		' make factor a percentage value and then apply it to the days specified
+		nReqResFac(2) = Cdbl(docStatus.GetItemValue("PWayUtilize2")(0)) * PCT
+
+		Set dtTemp = docStatus.GetFirstItem(f_PWDATE).DateTimeValue
+		nDaysPartial = PathwayCalcDuration(docStatus.GetItemValue("PWayDuration2")(0), docStatus.GetItemValue("PWayDurationType2")(0), dtTemp)
+
+		nReqResCnt(2) = Cint(nDaysPartial * nReqResFac(2))
+		nCurrExtra(2) = nReqResCnt(2)
+	End If
+
+	' if 3rd resource used, calculate the days used:
+	'	<days entered> * <utilization percentage>
+	If (sReqRes(3) <> "") Then
+		' first make sure there's a value
+		If (docStatus.GetFirstItem("PWayUtilize3").Text = "") Then
+			Call docStatus.ReplaceItemValue("PWayUtilize3", "100")
+		End If
+
+		Call pwayLog.LogAction("PathwayCloseAllocProviders(): get funded days for third provider" & Chr(13))
+
+		' make factor a percentage value and then apply it to the days specified
+		nReqResFac(3) = Cdbl(docStatus.GetItemValue("PWayUtilize3")(0)) * PCT
+
+		Set dtTemp = docStatus.GetFirstItem(f_PWDATE).DateTimeValue
+		nDaysPartial = PathwayCalcDuration(docStatus.GetItemValue("PWayDuration3")(0), docStatus.GetItemValue("PWayDurationType3")(0), dtTemp)
+
+		nReqResCnt(3) = Cint(nDaysPartial * nReqResFac(3))
+		nCurrExtra(3) = nReqResCnt(3)
+	End If
+
+	' loop through the input array of monthly use values.  each entry contains the numbers of days calculated for that year/month.
+	x = 0
+	Forall sEngDays In aMonthly
+
+		' extract the year for this month
+		key = Listtag(sEngDays)
+		sYear = Strleft(key, "/")
+
+		Call pwayLog.LogAction("PathwayCloseAllocProviders(): processing monthly document for " & key & ".  Starting value = " & aMonthly(key))
+
+		' calculate this month's ratio of the total number of days for determining
+		' apportionment of additional resource's days
+		nRatio = Round((sEngDays / nDays), 1)
+
+		' adjust month's days by utilization factor
+		aMonthly(key) = sEngDays * nResFactor
+
+		Call pwayLog.LogAction("PathwayCloseAllocProviders():   Value after applying utilization = " & aMonthly(key))
+
+		' check the additional resource fields
+		For y = 2 To 3
+			If (sReqRes(y) <> "") Then
+				' based on this month's ratio, calculate the # of additional days from this resource to be applied
+				' to this month.  ie. this month is 10% of total and resource #2 has 8 days: 0.1 * 8 = 0.8, so add 1 day to this month
+				nTempExtra = Cint(nRatio * nReqResCnt(y))
+
+				' keep running total of days applied for each resource in nCurrExtra( )
+				If (nTempExtra < nCurrExtra(y)) Then
+					' if there are enough days left to apply, add calculated value to monthly total
+					'   and decrement the resource's running total
+					aMonthly(key) = aMonthly(key) + nTempExtra
+					nCurrExtra(y) = nCurrExtra(y) - nTempExtra
+				Else
+					' at the end, so add what's left to the monthly total and clear out running total
+					aMonthly(key) = aMonthly(key) + nCurrExtra(y)
+					nCurrExtra(y) = 0
+				End If
+			End If
+		Next
+
+		Call pwayLog.LogAction("PathwayCloseAllocProviders():   Value after additional providers = " & aMonthly(key))
+
+		' if we've seen this year, just increment its counter
+		If (Iselement(nYearDays(sYear))) Then
+			nYearDays(sYear) = nYearDays(sYear) + aMonthly(key)
+		Else
+			' otherwise, if first in the year, initialize its counter
+			nYearDays(sYear) = aMonthly(key)
+		End If
+
+		' keep running sum of days used
+		nTempTotal = nTempTotal + aMonthly(key)
+	End Forall
+
+Sub_Exit:
+	Exit Sub
+
+Sub_Error:
+	If (Err = ERR_CANCEL) Then
+		Resume Sub_Exit
+	End If
+	Print Error & " - " & Err
+
+	Call AddToStackTrace()
+
+End Sub

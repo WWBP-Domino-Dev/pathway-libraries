@@ -1,0 +1,147 @@
+Sub PathwaySendStatus
+
+	Dim docProf As NotesDocument
+	Dim docStatus As NotesDocument
+	Dim docNotify As NotesDocument
+	Dim rtBody As NotesRichTextItem
+	Dim rtLog As NotesRichTextItem
+	Dim rtSaveRR As NotesRichTextItem
+
+	Dim sCurr As String
+	Dim sSig As String
+	Dim sReq As String
+	Dim sSubj As String
+	Dim sTemp As String
+
+	Dim vReply As Variant
+
+	statusText(0) = "This is a response to your inquiry about the status of this Resource Request (RR ["
+
+	Set session = Nothing
+	Set session = New NotesSession
+	Set ws = New NotesUIWorkspace
+
+	On Error Goto Sub_Error
+
+	Set docProf = db.GetProfileDocument("CalendarProfile")
+	sSig = docProf.GetItemValue("Signature")(0)
+	Set docProf = Nothing
+
+	Set docStatus = session.DocumentContext
+	If (docStatus Is Nothing) Then
+		Set docStatus = ws.CurrentDocument.Document
+	End If
+	If (docStatus Is Nothing) Then
+		Error 30945, "Can't find current document"
+	End If
+	sReq = docStatus.GetFirstItem(f_PWID).Text
+
+'	make sure the summary status has been set
+	If (Not docStatus.HasItem(f_PWCOMM) Or Len(docStatus.GetItemValue(f_PWCOMM)(0)) = 0) Then
+		Msgbox "Status document for " & sReq & " has no summary text", 48, "Status Send"
+		Goto Sub_Exit
+	End If
+
+'	build status document for sending
+	Set docNotify = New NotesDocument(db)
+	Call docNotify.ReplaceItemValue("Form", "Memo")
+	Call docNotify.ComputeWithForm(True, True)
+	Call docNotify.ReplaceItemValue("SendTo", docStatus.GetItemValue(f_PWADDR)(0))
+	Set rtBody = New NotesRichTextItem (docNotify, "Body")
+
+'	prompt user for CC value and new SendTo value
+	vReply = ws.DialogBox("CopyPrompt", True, True, False, False, False, False, "CC for status", docNotify, False)
+	If (vReply <> True) Then
+		Goto Sub_Exit
+	End If
+
+	sCurr = docStatus.GetFirstItem("PWayCurrStat").Text
+	Set rtLog = docStatus.GetFirstItem("PWayStatusLog")
+
+	aFields(LBL_DATE) = docStatus.GetItemValue(f_PWDATE)(0)
+	aFields(LBL_ISV) = docStatus.GetItemValue(f_PWISV)(0)
+	aFields(LBL_DUR) = docStatus.GetItemValue(f_PWDUR)(0)
+	aFields(LBL_DLV) = docStatus.GetItemValue(f_PWDLV)(0)
+	aFields(LBL_HELP) = docStatus.GetItemValue(f_PWHELP)(0)
+	aFields(LBL_TAM) = docStatus.GetItemValue(f_PWTAM)(0)
+	aFields(LBL_PRI) = docStatus.GetItemValue(f_PWPRI)(0)
+	aFields(LBL_STAT) = docStatus.GetItemValue(f_PWSTAT)(0)
+
+	If (docStatus.HasItem(f_PWREQ)) Then
+		Set rtSaveRR = docStatus.GetFirstItem(f_PWREQ)
+	Else
+		Set rtSaveRR = New NotesRichTextItem (docStatus, f_PWREQ )
+		Call rtSaveRR.AddNewLine(1)
+		Call rtSaveRR.AppendText("* * Original request text not available * *")
+		Call rtSaveRR.AddNewLine(1)
+	End If
+
+	sSubj = "Status: RR [" & sReq & "] | " & aFields(LBL_STAT) & " | " & aFields(LBL_DATE) & ", " & aFields(LBL_ISV) & ", " & _
+	aFields(LBL_DUR) & ", " & aFields(LBL_DLV) & ", " & aFields(LBL_HELP) & " | " & aFields(LBL_TAM) & ", " & aFields(LBL_PRI)
+	Call docNotify.ReplaceItemValue("Subject", sSubj)
+
+	If (docStatus.HasItem(f_PWCOMM)) Then
+		sTemp = docStatus.GetFirstItem(f_PWCOMM).Text
+	Else
+		sTemp = "* * No current status available * *"
+	End If
+	If (docStatus.HasItem(f_PWCOMMLOG)) Then
+		Set rtLog = docStatus.GetFirstItem(f_PWCOMMLOG)
+	Else
+		Set rtLog = New NotesRichTextItem (docStatus, f_PWCOMMLOG )
+		Call rtLog.AddNewLine(1)
+		Call rtLog.AppendText("* * No status history available * *")
+		Call rtLog.AddNewLine(1)
+	End If
+
+	Call rtBody.AppendStyle(rsNormal)
+	Call rtBody.AppendText(statusText(0) & sReq & statusText(1))
+	Call rtBody.AddNewLine(2)
+
+	Call rtBody.AppendText(SEP)
+	Call rtBody.AddNewLine(2)
+
+	Call rtBody.AppendStyle(rsBold)
+	Call rtBody.AppendText(statusText(2))
+	Call rtBody.AddNewLine(2)
+
+	Call rtBody.AppendStyle(rsNormal)
+	Call rtBody.AppendText(sTemp)
+	Call rtBody.AddNewLine(2)
+
+	Call rtBody.AppendText(SEP)
+	Call rtBody.AddNewLine(2)
+
+	Call rtBody.AppendStyle(rsBold)
+	Call rtBody.AppendText(statusText(3))
+	Call rtBody.AddNewLine(2)
+
+	Call rtBody.AppendStyle(rsNormal)
+	Call rtBody.AppendText(rtLog.GetFormattedText(False, 0))
+	Call rtBody.AddNewLine(2)
+
+	Call rtBody.AppendText(SEP)
+	Call rtBody.AddNewLine(1)
+
+	Call rtBody.AppendText(sSig)
+	Call rtBody.AddNewLine(2)
+
+	Call rtBody.AppendText(SEP)
+	Call rtBody.AddNewLine(1)
+
+	Call rtBody.AppendText("Original Request")
+	Call rtBody.AddNewLine(2)
+
+	Call rtBody.AppendRTItem(rtSaveRR)
+
+	Call docNotify.Send(False)
+
+	Msgbox "Sent status summary for RR " & sReq & " to " & docNotify.GetItemValue("SendTo")(0), 48, "Status Update"
+
+Sub_Exit:
+	Exit Sub
+
+Sub_Error:
+	Call AddToStackTrace()
+
+End Sub

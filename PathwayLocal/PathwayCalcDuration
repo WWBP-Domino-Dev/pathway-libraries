@@ -1,0 +1,171 @@
+Function PathwayCalcDuration (dur As Integer, durType As String, dtEnd As NotesDateTime) As Double
+
+%REM
+Name:
+	PathwayCalcDuration
+
+Arguments:
+	dur			duration of the engagement, or of an additional provider's contribution
+	durType		increment of the duration value
+	dtEnd		date the engagement is due to end, calculated by this routine.  it's input value is the start date.
+					the actual end date is calculated by this routine.
+
+Return:
+	A double value.  The fixed portion is the number of days, and the fractional portion is the number of hours.
+	For example, 3.25 would be 2 days and 2 hours.
+
+Called By:
+	Library routines:
+		PathwayReqValue
+		PathwayProcessTemplate
+		PathwayUpdateRequest
+		PathwayCloseRequest
+		PathwayBatchProcessor
+		PathwayCloseAllocProviders
+
+Description:
+	For financial accounting purposes we need to know the number of work days in the
+	engagement.  For example, a one week engagement has five work days.
+
+	The Month and Year durations are variable in the number of work days they might include,
+	so the count needs to be done manually by scanning the date range.
+%END REM
+
+	Dim dtCalc As NotesDateTime
+
+	Dim nX As Integer
+	Dim nY As Integer
+	Dim nDur As Integer
+	Dim nDurType As String
+
+	Dim bCalcPending As Boolean
+
+
+	Const Sunday = 1
+	Const Saturday = 7
+
+	On Error Goto Func_Error
+
+	PathwayCalcDuration = 0
+	Set dtCalc = New NotesDateTime(dtEnd.DateOnly & " 08:00:00")
+
+%REM
+	If (doc.HasItem("PWayResDuration")) Then
+		If (Len(doc.GetFirstItem("PWayResDuration").text) > 0) Then
+			nDur = doc.GetItemValue("PWayResDuration")(0)
+		Else
+			nDur = doc.GetItemValue("PWayDuration")(0)
+		End If
+	Else
+		' if it's a Custom value, then just default to a 1-day engagement
+		' since this must be an initial request process, the value doesn't really matter
+		If (nDurType <> "Custom") Then
+			nDur = doc.GetItemValue("PWayDuration")(0)
+		Else
+			nDur = 1
+		End If
+	End If
+%END REM
+
+	' load and show local duration values
+	nDur = dur
+	nDurType = durType
+
+	Call pwayLog.LogAction("PathwayCalcDuration(): start date = " & dtEnd.DateOnly)
+	Call pwayLog.LogAction("PathwayCalcDuration(): request duration = " & Cstr(nDur) & " " & nDurType)
+	Call pwayLog.LogAction("PathwayCalcDuration(): initial end date = " & dtEnd.DateOnly)
+
+	' set flag when we can determine the day count
+	bCalcPending = True
+	' depending on the duration increment, adjust the ending date
+	Select Case nDurType
+
+	Case "Hours"
+		' maintain the display in hours, convert value to days for processing
+		PathwayCalcDuration = nDur / 8
+
+		' engagement expressed in business days.  convert every 5 business days to 7 calendar days
+		nY = Fix(PathwayCalcDuration)
+		nX = ((Fix(nY / 5) * 7)) + ((Fraction(nY / 5) * 10) / 2)
+		Call pwayLog.LogAction("PathwayCalcDuration(): increment = " & Cstr(nX))
+
+		' move ending date
+		Call dtEnd.AdjustDay(Fix(nX))
+		If (Fraction(PathwayCalcDuration) > 0) Then
+			Call dtEnd.AdjustDay(1)
+		End If
+		bCalcPending = False
+
+	Case "Days"
+		PathwayCalcDuration = nDur
+
+		' engagement expressed in business days.  convert every 5 business days to 7 calendar days
+		nX = ((Fix(nDur / 5) * 7) + (Fraction(nDur / 5) * 10) / 2)
+		Call pwayLog.LogAction("PathwayCalcDuration(): increment = " & Cstr(nX))
+
+		' move out the end date
+		Call dtEnd.AdjustDay(nX)
+		bCalcPending = False
+
+	Case "Weeks"
+		' each week contains 5 business days
+		PathwayCalcDuration = nDur * 5
+
+		' but each week is also 7 calendar days
+		nX = (nDur * 7)
+
+		' move out the end date
+		Call dtEnd.AdjustDay(nX)
+		bCalcPending = False
+
+	Case "Custom"
+		PathwayCalcDuration = nDur
+
+		' move out the end date a default amount
+		Call dtEnd.AdjustDay(1)
+		bCalcPending = False
+
+	Case "Months"
+		Call dtEnd.AdjustMonth(nDur)
+
+	Case "Years"
+		Call dtEnd.AdjustYear(nDur)
+
+	End Select
+
+	' back up one day.  (otherwise you're not counting the day the engagement starts)
+	Call dtEnd.AdjustDay(-1)
+	' if end date stops on a weekend date, back up to Friday if the engagement starts during the week.
+	' if the engagement starts on the weekend, who knows what the heck is going on?
+	If (Weekday(dtCalc.DateOnly) > 1 And Weekday(dtCalc.DateOnly) < 7) Then
+		Select Case Weekday(dtEnd.DateOnly)
+		Case 1		' Sunday
+			Call dtEnd.AdjustDay(-2)
+			Call pwayLog.LogAction("PathwayCalcDuration():   back off Sunday")
+		Case 7		' Saturday
+			Call dtEnd.AdjustDay(-1)
+			Call pwayLog.LogAction("PathwayCalcDuration():   back off Saturday")
+		End Select
+		Call pwayLog.LogAction("PathwayCalcDuration(): adjusted end date = " & dtEnd.DateOnly)
+	End If
+
+	' the Month and Year adjustments are variable in the number of weekdays they might
+	' include, so count them manually by moving the saved start date to the new end date
+	' counting the weekdays along the way.
+	If (bCalcPending) Then
+		Do Until dtCalc.TimeDifference(dtEnd) > 0
+			If (Weekday(dtCalc.DateOnly) > Sunday And Weekday(dtCalc.DateOnly) < Saturday) Then
+				PathwayCalcDuration = PathwayCalcDuration + 1
+			End If
+			Call dtCalc.AdjustDay(1)
+		Loop
+	End If
+
+	Call pwayLog.LogAction("PathwayCalcDuration(): return value = " & Cstr(PathwayCalcDuration))
+Func_Exit:
+	Exit Function
+
+Func_Error:
+	Call AddToStackTrace()
+
+End Function

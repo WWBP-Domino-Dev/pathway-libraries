@@ -1,0 +1,374 @@
+%REM
+Name:
+	PathwayProcessTemplate
+
+Arguments:
+	doc: selected request document from the Inbox
+
+Called By:
+	Action Menu selection
+
+Calls To:
+	PathwayTemplateDialog
+
+Description:
+	Open a web request document processed by web agent WebRequestProcessor.
+	It contains the details of an engagement request and needs to be assigned a request id and
+	have a status document created for it.
+
+	1.	Create a new Reply document with default informational text plus a web page link for the new request.
+	2.	Call routine to prompt the user to validate the request values in the input document.
+	3.  Treat the PWayISV field as if it is always multi-valued, so setup a processing loop
+	4.		Synchronously generate a new request id for each instance of the PWayISV field.
+	5.		Create a status document for each instance of the PWayISV field,
+			populating it with PAThway fields from the input document.
+	6.		Update the status document with current values for the request id and the current partner.
+	7.		Append a web link to the reply document for each instance of the PWayISV field.
+	8.	Update the global profile document with the last request id and the save the new documents.
+
+History:
+	7/31/2012
+	Added capability to process multiple partners.
+
+%END REM
+Sub PathwayProcessTemplate(doc As NotesDocument)
+
+	Dim docShow As NotesDocument
+	Dim docStatus As NotesDocument
+	Dim docProfile As NotesDocument
+	Dim docUI As NotesUIDocument
+	Dim view As NotesView
+	Dim coll As NotesDocumentCollection
+	Dim rtInput As NotesRichTextItem
+	Dim rtStatus As NotesRichTextItem
+	Dim rtRender As NotesRichTextItem
+	Dim dtPosted As NotesDateTime
+	Dim dtRR As NotesDateTime
+	Dim dtEnd As NotesDateTime
+	Dim itmProf As NotesItem
+	Dim auditLog As NotesLog
+	Dim lockObj As New DocumentLock
+
+	Dim sBodyName As String
+	Dim sFrom As String
+	Dim sSubject As String
+	Dim sFolder As String
+	Dim search As String
+	Dim sUnid As String
+	Dim auditReqs As String
+	Dim sReqlinks As String
+	Dim aReqId() As string
+	Dim aSearch(0) As String
+	Dim auditEntries(1 To 4) As String
+
+	Dim x As Integer
+	Dim loopCnt As Integer
+	Dim nReq As Integer
+	Dim nFirstReq As Integer
+	Dim nDays As Integer
+	Dim nReqCount As Integer
+	Dim partnerCount As Integer
+	Dim techsEngaged As Integer
+	Dim bUpdateOK As Boolean
+	Dim bNoProd As Boolean
+
+	Const PRINCIPAL = "IBM Cloud PATHway <pathway@wwbpnotesa.dub.usoh.ibm.com>"
+
+	On Error GoTo Sub_Error
+
+	Set ws = New NotesUIWorkspace
+
+	' initialize the user's log file
+	Set stream = session.CreateStream
+	Call stream.Open(debugFile, "ASCII")
+
+	' Don't let the log grow forever
+	If (stream.Bytes > LOGLIMIT) Then
+		Call stream.Truncate
+	End If
+
+	' Append a separator
+	Call stream.WriteText(" ", EOL_CRLF)
+	Call stream.WriteText(SEP, EOL_CRLF)
+	Call stream.Close
+
+	' Create the log object
+	Set pwayLog = New NotesLog("PATHway Create Log")
+	Call pwayLog.OpenFileLog(debugFile)
+	Call pwayLog.LogAction("PathwayProcessTemplate()")
+
+	' Create audit log object
+	Set auditLog = session.CreateLog("WebRequestProcessor")
+	Call auditLog.Opennoteslog(ProdServer, ProdPath & "pathway_audit_log.nsf")
+
+	Set dtPosted = New NotesDateTime("Today")
+
+	' Enter initial audit log entries
+	auditEntries(1) = "Processed request submit time: " & doc.Created
+	auditEntries(2) = "..Processed request id: " & doc.Universalid
+	' Call auditLog.Logaction("Processed request submit time: " & doc.Created)
+	' Call auditLog.Logaction("..Processed request id: " & doc.Universalid)
+
+	' create new Reply document with the Pathway fields
+	Set docShow = dbServer.CreateDocument
+	Call docShow.AppendItemValue("Form", f_REPLY)
+	Call docShow.ReplaceItemValue("PostedDate", dtPosted)
+	Set rtInput = docShow.CreateRichTextItem(f_BODY)
+
+	' set the SendTo from the incoming doc
+	sFrom = doc.GetFirstItem("From").Text
+	Call docShow.ReplaceItemValue("SendTo", sFrom)
+	Call docShow.Replaceitemvalue("Principal", PRINCIPAL)
+
+	' allow for misbehaving user who erroneously mailed a pasted copy of the template instead of the template itself.
+	Call docShow.ReplaceItemValue("NoImage", 1)
+
+	' Define text for automated response to request creation
+	aReqResp("Line1a") = "This is a confirmation that IBM Cloud PATHway has recently received your Resource Request.  The Request ID"
+	aReqResp("Line1b") = " and it is currently under review.  If approved, PATHway will assign the appropriate resource. " & NEWLINE & NEWLINE & _
+	"Please verify the accuracy of the information you have submitted.  It is imperative we have accurate and complete information to ensure deployment of appropriate resources.   " & _
+	"If you have any concerns or would like to raise the focus/priority on this request please email " & _
+	"IBM Cloud PATHway (" & PathwayInternetMail & ") " & _
+	"using the latest copy you have of your request thread, or contact Debra Nurkin/Piscataway/IBM (720-396-7197, Mobile: 908-812-1627) "
+	aReqResp("LineStatus1") = {For the current summary of the request refer to this URL:} & NEWLINE
+	' aReqResp("LineStatus2") = "    http://" & ProdHost & ProdPath & ProdFile & "/PWStatus?ReadForm&PWayReq="
+
+	' Open dialog window for template processing.
+	' Provide default values for the status field.  It must be added to the
+	' request document, as new fields on the create subform will not be brought
+	' back to the request document.
+	Call doc.ReplaceItemValue(f_PWSTAT, "PATHway")
+
+	' Show request to user
+	Call PathwayTemplateDialog(doc)
+
+	' generate the folder name from the Requestor's name
+	sFolder = v_TAMFOLDER & aTemplateInput(LBL_TAM)
+
+	' add requestor's name to generated URL
+	aReqResp("LineStatus2") = "    http://" & ProdHost & ProdPath & ProdFile & "/PathwayWebViewDisplayDirect?OpenAgent&ReportName=StatusReport&ReportUser=" & Replace(aTemplateInput(LBL_TAM), " ", "%20") & "&PWayID="
+
+	' get the current global profile document
+	Set view = dbServer.GetView(v_PROFILE)
+	If (view.EntryCount > 0) Then
+		Set docProfile = view.GetFirstDocument
+	Else
+		Error ERR_PROFILE_MISSING, MSG_PROFILE_MISSING
+	End If
+	If (docProfile.GetItemValue("Debugging")(0) <> "") Then
+		bDebug = True
+	End If
+
+	' lock it from other users
+	Print "locking profile to generate new request id"
+	Call lockObj.lockDocuments(docProfile)
+
+	' Calculate the (first) new request id.
+	nReq = docProfile.GetFirstItem(f_CNTR).Text
+	nFirstReq = nReq + 1
+
+	' Create the Subject text for the reply document.
+	sSubject = "RR [" & nFirstReq & "]"
+	aTemplateInput(LBL_DUR) = aTemplateInput(LBL_DUR) & " "
+
+	sSubject = sSubject & " | " & aTemplateInput(LBL_STAT) & " | " & aTemplateInput(LBL_DATE) & ", " & aTemplateInput(LBL_ISV) & ", " & _
+	aTemplateInput(LBL_DUR) & aTemplateInput(LBL_BLOCK) & ", " & aTemplateInput(LBL_DLV) & ", " & aTemplateInput(LBL_HELP) & " | " & aTemplateInput(LBL_TAM) & ", " & aTemplateInput(LBL_PRI)
+
+	Call docShow.ReplaceItemValue("Subject", sSubject)
+
+	' update new Inbox request document with the new request number
+	Call doc.ReplaceItemValue(f_PWID, nFirstReq)
+
+	' Loop through the list of partner ids (usually only 1).
+	auditReqs = ""
+	sReqLinks = ""
+	nReqCount = 0
+
+	' first extract the number of practitioners (if any)
+	If (Len(doc.Getfirstitem("PWayPractEngaged").Text) = 0) Then
+		Call doc.Replaceitemvalue("PWayPractEngaged", 0)
+	End If
+	techsEngaged = doc.Getfirstitem("PWayPractEngaged").Values(0)
+
+	' check the count of partners.  if more than one, divide the number of practitioners by the number of partners
+	partnerCount = UBound(doc.Getfirstitem("PWayISV").Values) + 1
+
+	If (partnerCount > 1 And techsEngaged > 0) Then
+		techsEngaged =  techsEngaged / partnerCount
+	End If
+
+	ForAll partnerEntry In doc.Getfirstitem("PWayISV").Values
+
+		' Increment request id.
+		nReq = nReq + 1
+		nReqCount = nReqCount + 1
+
+		' create and initialize status document
+		Set docStatus = New NotesDocument(dbServer)
+		Call docStatus.AppendItemValue("Form", f_DATA)
+		Call docStatus.ReplaceItemValue("Subject", "Status Document for RR " & nReq)
+		Call docStatus.ReplaceItemValue("SaveOptions", "0")
+
+		' load all of the common Pathway fields from the edited document.
+		' if found, remove the attachments field
+		ForAll itm In doc.Items
+			If (itm.Name Like "PWay*") Then
+				Call itm.CopyItemToDocument(docStatus, itm.Name)
+			End If
+		End ForAll
+
+		' explicitly update this value.  if there are multiple partners, the total practitioners engaged
+		' should be split among the individual request documents
+		Call docStatus.ReplaceItemValue("PWayPractEngaged", techsEngaged)
+
+		' Update the new id and partner values.
+		Call docStatus.ReplaceItemValue(f_PWID, nReq)
+		Call docStatus.ReplaceItemValue(f_PWISV, partnerEntry)
+
+		' don't need to keep the attachments in this document
+		If (docShow.HasItem("PWayAttachments")) Then
+			Call docShow.RemoveItem("PWayAttachments")
+		End If
+
+		' remove web field so Inbox processor isn't confused
+		If (docStatus.HasItem("PWayWebReq")) Then
+			Call docStatus.RemoveItem("PWayWebReq")
+		End If
+
+		' load the current rate value
+		Set itmProf = docProfile.GetFirstItem("PWayRate")
+		Call itmProf.CopyItemToDocument(docStatus, itmProf.Name)
+
+		' load the generic fields
+		Call docStatus.AppendItemValue(f_PWOPEN, "1")
+		Call docStatus.AppendItemValue(f_PWOPENDT, dtPosted)
+
+		' 6/15/2010: no need for the PW Owner field
+		Call docStatus.ReplaceItemValue(f_PWSTAT, "PATHway")
+		Call docStatus.ReplaceItemValue("Principal", "PATHway Mail Processor")
+		Call docStatus.ReplaceItemValue("PostedDate", dtPosted)
+		Call docStatus.ReplaceItemValue(f_PWUPD, dtPosted)
+
+		' calculate the ending date
+		Set dtEnd = New NotesDateTime(docStatus.GetFirstItem("PWayNeeded").Text)
+		Set dtRR = dtEnd
+		nDays = PathwayCalcDuration(docStatus.GetItemValue("PWayDuration")(0), docStatus.GetItemValue("PWayDurationType")(0), dtEnd)
+		Call docStatus.ReplaceItemValue("PWayEndNeeded", dtEnd)
+
+		' 04/13/2016 update
+		If (Len(docStatus.Getfirstitem(f_PWMRR).Text) > 0) Then
+			If (Len(docStatus.Getfirstitem(f_PWMRRYR).Text) = 0) Then
+				Call docStatus.Replaceitemvalue(f_PWMRRYR, (13 - Month(dtRR.Dateonly)) * docStatus.GetItemValue(f_PWMRR)(0))
+			End If
+		End If
+
+		' Save the new status doc.
+		If Not (docStatus.Save(True, False)) Then
+			Error ERR_SAVE_FAILURE, MSG_SAVE_FAILURE & "New status document for partner " & docStatus.Getitemvalue("PWayISV")(0)
+		End If
+		Call docStatus.PutInFolder(sFolder)
+
+	    ' Add link to the web status page
+		sReqLinks = sReqLinks & aReqResp("LineStatus2") & nReq & NEWLINE
+		'Call rtInput.AppendText(aReqResp("LineStatus2") & nReq)
+
+		' Enter audit entry for the request id.
+		auditReqs = auditReqs & nReq & " "
+		' Call auditLog.Logaction("..Processed request Pathway id: " & nReq & NEWLINE)
+
+	End ForAll
+
+	auditEntries(3) = "..Processed request Pathway id(s): " & auditReqs & NEWLINE
+
+	' Build the fixed reply text in the Reply document
+	Call rtInput.AppendStyle(rsNormal)
+	if (nReqCount > 1) Then
+		Call rtInput.AppendText(aReqResp("Line1a") & "s are " & auditReqs & aReqResp("Line1b"))
+	Else
+		Call rtInput.AppendText(aReqResp("Line1a") & " is " & auditReqs & aReqResp("Line1b"))
+	End If
+	Call rtInput.AddNewLine(2)
+	Call rtInput.AppendText(aReqResp("LineStatus1"))
+
+	' Add req page links
+	Call rtInput.Appendtext(sReqLinks)
+
+	' Finish reply email text
+	Call rtInput.AddNewLine(2)
+	Call rtInput.AppendText(sDBsignature)
+
+	' saved the status document, so now attempt to save the reply document.  a failure here will
+	' force a deletion of the just-saved status document.
+	Print "saving the Reply doc"
+	If Not (docShow.Save(False, False, False)) Then
+		' save failure here requires cleanup to prevent conflicts
+		Call docStatus.Remove(True)
+		Error ERR_SAVE_FAILURE, MSG_SAVE_FAILURE & "TAM's reply document"
+	End If
+	Call docShow.PutInFolder("($Inbox)")
+	auditEntries(4) = "..Successfully saved request document"
+
+	For x = 1 To 4
+		Call auditLog.Logaction(auditEntries(x))
+	Next
+	' Call auditLog.Logaction("..Successfully saved request document")
+
+	' update the profile document with the new request number if we still have ownership
+	Print "update the global profile doc"
+	If (lockObj.checkLock) Then
+		Call docProfile.ReplaceItemValue(f_CNTR, nReq)
+		If Not (docProfile.Save(True, False)) Then
+			' save failure here requires cleanup to prevent conflicts
+			Call docShow.Remove(True)
+			Call docStatus.Remove(True)
+			Error ERR_SAVE_FAILURE, MSG_SAVE_FAILURE & "Global profile document"
+		End If
+	Else
+		' lock failure here requires cleanup to prevent conflicts
+		Call docShow.Remove(True)
+		Call docStatus.Remove(True)
+		Error ERR_LOCK_REVOKED, MSG_LOCK_REVOKED & lockObj.newOwner
+	End If
+
+	Call doc.Removefromfolder("($Inbox)")
+
+	Print "Finished"
+	bUpdateOK = True
+
+Sub_Exit:
+	' release the lock on the global profile document
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.releaseDocuments(False)
+	End If
+
+	' if process completed normally, a couple of more tasks to do
+	If (bUpdateOK) Then
+		' if running on a local replica, try to replicate to pick up the new documents
+		If (db.Server = "" And foundServer) Then
+			db.Replicate(serverName)
+		End If
+		Call ws.ViewRefresh
+
+		Call docShow.Send(False)
+		Call ws.Prompt(PROMPT_OK, "PATHway Request Processing", "Request response has been sent")
+		' Call ws.EditDocument(True, docShow,,,False,True)
+	End If
+
+	Exit Sub
+
+Sub_Error:
+	If (Err = ERR_CANCEL) Then
+		Resume Sub_Exit
+	End If
+
+	Print Err
+
+
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.releaseDocuments(False)
+		Set lockObj = Nothing
+	End If
+
+	Call AddToStackTrace()
+
+End Sub

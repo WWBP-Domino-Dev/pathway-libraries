@@ -1,0 +1,228 @@
+Function PathwayCloseEditing (doc As NotesDocument, batch As Boolean) As String
+
+%REM
+Name:
+	PathwayCloseEditing
+
+Arguments:
+	doc: selected Memo or Reply document from the Inbox
+
+Called By:
+	Library routine PathwayCloseRequest
+
+Description:
+	Provide editing for selected fields on the close dialog.  Text describing the edit failures is
+	returned to the caller.  The fields checked are:
+
+	PWayProviderChg
+	PWayOrigProvider
+	PWayOrigReason
+	PWayException
+	PWayExcepReason
+	PWayResName
+	PWayResAddr
+	PWayRevenue
+	PWayRevAmt
+	PWayCostAmt
+	PWayProd
+	PWayResFunding
+	PWayFundMgr
+	PWayTL
+	PWayDeliver
+	PWayLocation
+	PWayHelp
+	PWayDuration
+	PWayDurationType
+
+History:
+	1/2/2014:
+%END REM
+
+	Dim view As NotesView
+	Dim docProfile As NotesDocument
+	Dim nameConvert As NotesName
+	Dim bpd As BluePages
+	Dim bpResultsOne As BPResults
+	Dim bpResultsFuzzy As BPResults
+	Dim coll As BPResults
+	Dim coll2 As BPResults
+	Dim aProviderEdits(1, 3) As String
+	Dim x As Integer
+	Dim temp As String
+	Dim reply As Variant
+	Dim nameList As Variant
+	Dim bCheck As Boolean
+	Dim bBluePages As Boolean
+
+	On Error Goto Func_Error
+
+	aProviderEdits(0, 0) = "PWayResName2"
+	aProviderEdits(0, 1) = "PWayDuration2"
+	aProviderEdits(0, 2) = "PWayDurationType2"
+	aProviderEdits(0, 3) = "PWayUtilize2"
+	aProviderEdits(1, 0) = "PWayResName3"
+	aProviderEdits(1, 1) = "PWayDuration3"
+	aProviderEdits(1, 2) = "PWayDurationType3"
+	aProviderEdits(1, 3) = "PWayUtilize3"
+
+	' profile needed to get Blue Pages connection data
+	Set view = db.GetView(v_PROFILE)
+	If (view.EntryCount > 0) Then
+		Set docProfile = view.GetFirstDocument
+	End If
+
+	' Initialize BluePages object
+	Set bpd = New BluePages(docProfile.APILocator(0))
+	bBluePages = True
+
+	' Quick exit if we can't connect
+	If Not bpd.IsOpen() Or bpd.GetReturnCode() <> 0 Then
+		bBluePages = False
+		PathwayCloseEditing = PathwayCloseEditing & "BluePage connection failed" & nl
+	End If
+
+	Forall itm In doc.Items
+		If (itm.Name Like "PWay*") Then
+			Select Case itm.Name
+
+			Case "PWayResProvider"
+				' There must be a Provider
+				If (doc.GetItemValue("PWayResProvider")(0) = "") Then
+					PathwayCloseEditing = PathwayCloseEditing & "Initial Provider name must have a value" & nl
+				End If
+
+			Case "PWayResName"
+				' There must be a resource name
+				If (doc.GetItemValue("PWayResName")(0) = "") Then
+					PathwayCloseEditing = PathwayCloseEditing & "Resource name must have a value" & nl
+				End If
+
+			Case "PWayResAddr"
+				' There must be a resource address (unless it's a batch process)
+				If (doc.GetItemValue("PWayResAddr")(0) = "" And Not batch) Then
+					PathwayCloseEditing = PathwayCloseEditing & "Resource address must have a value" & nl
+				End If
+
+			Case "PWayResProvider2"
+				' if an additional provider is entered, verify entry of the supplemental fields
+				If (doc.GetItemValue("PWayResProvider2")(0) <> "") Then
+					bCheck = False
+					For x = 0 To Ubound(aProviderEdits)
+						If (doc.GetItemValue(aProviderEdits(0, x))(0) = "") Then
+							bCheck = True
+						End If
+					Next
+					If (bCheck) Then
+						PathwayCloseEditing = PathwayCloseEditing & "Data for Additional Resource #1 is incomplete" & nl
+					End If
+				End If
+
+			Case "PWayResProvider3"
+				' if an additional provider is entered, verify entry of the supplemental fields
+				If (doc.GetItemValue("PWayResProvider3")(0) <> "") Then
+					bCheck = False
+					For x = 0 To Ubound(aProviderEdits)
+						If (doc.GetItemValue(aProviderEdits(1, x))(0) = "") Then
+							bCheck = True
+						End If
+					Next
+					If (bCheck) Then
+						PathwayCloseEditing = PathwayCloseEditing & "Data for Additional Resource #2 is incomplete" & nl
+					End If
+				End If
+
+			Case "PWayRevenue"
+				' There must be a Revenue selection
+				If (itm.Text = "") Then
+					PathwayCloseEditing = PathwayCloseEditing & "Revenue designation must be selected" & nl
+				Else
+					If (itm.Text = "Fee") Then
+						If (Cstr(doc.GetItemValue("PWayRevAmt")(0)) = "") Then
+							PathwayCloseEditing = PathwayCloseEditing & "Revenue amount must be specified" & nl
+						End If
+						If (Cstr(doc.GetItemValue("PWayCostAmt")(0)) = "") Then
+							PathwayCloseEditing = PathwayCloseEditing & "Cost amount must be specified" & nl
+						End If
+					End If
+					If (itm.Text = "Program Spend") Then
+						If (Cstr(doc.GetItemValue("PWayEstCostAmt")(0)) = "") Then
+							PathwayCloseEditing = PathwayCloseEditing & "Estimated Cost amount must be specified" & nl
+						End If
+					End If
+				End If
+
+			Case "PWayProgramSpend"
+				If (doc.HasItem("PWayProgramSpend")) Then
+					If (doc.GetItemValue("PWayProgramSpend")(0) <> "") Then
+						If (Cstr(doc.GetItemValue("PWayEstCostAmt")(0)) = "") Then
+							PathwayCloseEditing = PathwayCloseEditing & "Estimated Cost amount must be specified" & nl
+						End If
+					End If
+				End If
+
+			Case "PWayProd"
+				' There must be a product
+				If (itm.Text = "") Then
+					PathwayCloseEditing = PathwayCloseEditing & "Product must be specified" & nl
+				End If
+
+			Case "PWayResFunding"
+				' If funding has been supplied, must also specify the funding manager and the cost/hour
+				If (itm.Text = "Yes") Then
+					' if funding is provided, two fields are required:
+					'   Manager
+					'   Travel and Lodging
+					If (doc.GetFirstItem("PWayFundMgr").Text = "") Then
+						PathwayCloseEditing = PathwayCloseEditing & "Funding manager must have a value" & nl
+					End If
+					If (doc.GetFirstItem("PWayTL").Text = "") Then
+						PathwayCloseEditing = PathwayCloseEditing & "Travel & Lodging must have a value" & nl
+					End If
+				End If
+
+			Case "PWayDeliver"
+				' Inbound and Outbound must have a location specified (unless it's a batch process)
+				If (itm.Text <> "Remote") Then
+					If (doc.GetItemValue("PWayAddress")(0) = "" And Not batch) Then
+						PathwayCloseEditing = PathwayCloseEditing & "Location must have a value" & nl
+					End If
+				End If
+
+			Case "PWayHelp"
+				' The Assistance (or Help) value may be modified while the request is open,
+				If (itm.Text = "") Then
+					PathwayCloseEditing = PathwayCloseEditing & "There must be an Assistance value" & nl
+				End If
+
+			Case "PWayDuration"
+				If (itm.Text = "") Then
+					PathwayCloseEditing = PathwayCloseEditing & "There must be a Duration value" & nl
+				End If
+				' the field must be numeric and it must be an integer
+				If Not (Isnumeric(itm.Text)) Then
+					PathwayCloseEditing = PathwayCloseEditing & "The 'Resource Provided for' value must be numeric" & nl
+				Else
+					If (Fraction(itm.Values(0)) <> 0) Then
+						PathwayCloseEditing = PathwayCloseEditing & "The 'Resource Provided for' value must be an integer" & nl
+					End If
+				End If
+
+			Case "PWayDurationType"
+				' don't accept "Custom" at close time
+				If (itm.Text = "") Then
+					PathwayCloseEditing = PathwayCloseEditing & "There must be a Duration increment" & nl
+				Elseif (itm.Text = "Custom") Then
+					PathwayCloseEditing = PathwayCloseEditing & "'Resource Provided for' increment cannot be 'Custom'" & nl
+				End If
+
+			End Select
+		End If
+	End Forall
+
+Func_Exit:
+	Exit Function
+
+Func_Error:
+	Call AddToStackTrace()
+
+End Function

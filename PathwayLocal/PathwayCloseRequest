@@ -1,0 +1,531 @@
+Sub PathwayCloseRequest (doc As NotesDocument)
+
+%REM
+Name:
+	PathwayCloseRequest
+
+Arguments:
+	doc		selected Memo or Reply document from the Inbox
+
+Called By:
+	Action Menu selection
+
+Description:
+	Access the status document associated with the selected document.  The status document is located from
+	various criteria outlined in the PathwayFindRR function.   The user is presented with a dialog box using the
+	same form used in PathwayTemplateDialog.  There are some fields in the dialog box form which are not visible
+	when updating, so a common hide-when formula governs which fields and captions are presented.
+
+	The status document can't be updated directly, as all of the fields are computed.  This was done because the
+	incoming mail agent could be updating these same documents, and using this dialog eliminated the need to
+	continually switch the SaveOptions field in and out.
+
+	As in request creation, the fields are validated just for existence, not for content.  The only exception is the type
+	of engagement duration.  For example, you can't specify "2 Custom" or "1 to 2 Weeks".
+
+	1.	Lock the input document(s).  If the input document is a Memo or Reply document, the associated status document
+		is also locked.
+	2.	Convert the input document to an image so that it can be included in the close dialog box's form.
+	3.	Prompt the user with the close dialog box.
+	4.	Call routine to calculate the end date and number of funded days in the engagement.
+	5.	Call routine to return 2 arrays:
+			a. List of dates representing the months covered by the engagement.  Used to create the supplemental status records.
+			b. List of dates for which calendar entries should be created.  The frequency of the reminder depends on the engagement length.
+	6.	Call routine to allocate additional providers to the monthly status documents
+	7.	Call routine to create the calendar documents based on values returned from step #5.
+	8.	Prompt user for additional names for the notification email.
+	9.	Save the status document.  If the save is successful, save the other documents created in previous steps.
+
+History:
+	6/2017:
+		Added code after the status document is successfully saved to optionally create WWBP Project
+		and Opportunity documents.  If a Project document was created, set flags in the status document
+		and reSave.
+	7/11/2006:	Moved the setting of the PWayCloseDate so that it's value is dependent on the bDatePast flag.
+					The Close date was the date the request was closed in PAThway.  If the engagement has already
+					taken place, now make the Close date equal to the engagement date.  Also set PWayOpenDate
+					PostedDate to the engagement date.
+
+%END REM
+
+	Dim uiDB As NotesUIDatabase
+	Dim docInbox As NotesDocument
+	Dim docStatus As NotesDocument
+	Dim docStatusMonth As NotesDocument
+	Dim docCal1 As NotesDocument
+	Dim docCal2 As NotesDocument
+	Dim docSend As NotesDocument
+	Dim docProfile As NotesDocument
+	Dim dtLog As NotesDateTime
+	Dim dtStart As NotesDateTime
+	Dim dtEnd As NotesDateTime
+	Dim dtRepeat As NotesDateTime
+	Dim dtTemp As NotesDateTime
+	Dim lockObj As New DocumentLock
+	Dim rtBody As NotesRichTextItem
+	Dim view As NotesView
+
+	Dim sYR As String
+	Dim sMN As String
+	Dim sErr As String
+	Dim sText As String
+	Dim sFolder As String
+	Dim sPrintNames As String
+	Dim sNameList As String
+	Dim sExtract As String
+	Dim sUnid As String
+	Dim aISV(1) As String
+	Dim aNames() As String
+
+	Dim nX As Integer
+	Dim nY As Integer
+	Dim nHours As Integer
+	Dim nConvert As Integer
+	Dim aEngDates List As Integer
+	Dim funcReply As Integer
+
+	Dim nCost As Double
+	Dim nRate As Double
+	Dim nDaysFunded As Double
+
+	Dim nFunding As Long
+	Dim nDaysPartial As Integer
+	Dim nPartial As Single
+
+	Dim vReply As Variant
+	Dim aCalendar As Variant
+	Dim aRepeat() As Variant
+	Dim vEmpty As Variant
+
+	Dim bTAM As Boolean
+	Dim bDatePast As Boolean
+	Dim bUpdateOK As Boolean
+	Dim bHaveMemo As Boolean
+	Dim bValidating As Boolean
+	Dim bCancelled As Boolean
+
+	If (ws Is Nothing) Then
+		Set ws = New NotesUIWorkspace
+	End If
+
+	On Error Goto Sub_Error
+
+	' initialize the log file
+	Set stream = session.CreateStream
+	Call stream.Open(debugFile, "ASCII")
+	If (stream.Bytes > LOGLIMIT) Then
+		Call stream.Truncate
+	End If
+	Call stream.WriteText(SEP, EOL_CRLF)
+	Call stream.Close
+
+	Set pwayLog = New NotesLog("PATHway Close Log")
+	Call pwayLog.OpenFileLog(debugFile)
+	Call pwayLog.LogAction("PathwayCloseRequest()")
+
+	' lock the document(s).
+	' normally using an Inbox document so it will find the status document.
+	' alternatively, could update the status document directly.
+	Call lockObj.lockDocuments(doc)
+	If (doc.Form(0) = "Memo" Or doc.Form(0) = "Reply") Then
+		Set docInbox = lockObj.inboxDoc
+		Set docStatus = lockObj.statusDoc
+		bHaveMemo = True
+	Else
+		Set docStatus = doc
+	End If
+
+	' set the close time
+	Set dtLog = New NotesDateTime("Today")
+
+	' if originating from an Inbox document, show it in the Close dialog box
+	If (bHaveMemo) Then
+		Set rtBody = New NotesRichTextItem(docStatus, "TempBody")
+'		Call doc.RenderToRTItem(rtBody)
+	End If
+
+	Set view = db.GetView("Pathway Global Profile")
+	If (view.EntryCount > 0) Then
+		Set docProfile = view.GetFirstDocument
+	Else
+		Error ERR_PROFILE_MISSING, MSG_PROFILE_MISSING
+	End If
+	nRate = docProfile.GetItemValue(f_PWRATE)(0)
+
+NameCheck:
+
+	bValidating = True
+	Do While bValidating
+		bValidating = False
+		sErr = ""
+
+		bCancelled = False
+		bTAM = False
+		vReply =  ws.DialogBox("PWayClose", false, false, False, False, False, False, "Pathway Close for " & docStatus.GetFirstItem(f_PWID).Text, docStatus, False)
+		If (Not vReply) Then
+			Error ERR_CANCEL, MSG_CANCEL
+		End If
+
+		' these conditions change validation decisions
+		If (docStatus.GetItemValue(f_PWCLSTAT)(0) = "Cancelled") Then
+			bCancelled = True
+		End If
+		If (docStatus.GetItemValue(f_PWCLSTAT)(0) = "Fulfilled by TAM") Then
+			bTAM = True
+		End If
+		If (bCancelled Or bTAM) Then
+			Goto NoProcess
+		End If
+
+		' call routine to validate selected fields
+		sErr = PathwayCloseEditing(docStatus, False)
+
+NoProcess:
+		If (bTAM) Then
+			If (docStatus.GetItemValue(f_PWTAMR)(0) = "") Then
+				sErr = sErr & "When fulfilled by Requestor, please enter reason text" & nl
+			End If
+		End If
+
+		If (sErr <> "") Then
+			bValidating = True
+			sErr = "The following fields failed editing checks" & nl & nl & sErr
+			Msgbox sErr, MB_ICONSTOP, "Close validation dialog"
+		End If
+
+	Loop
+
+	' the main status field is either "Fulfilled" or something else.   the actual close status could have
+	' variations as far as who fulfilled the request.
+	If (docStatus.GetItemValue(f_PWCLSTAT)(0) Like "Fulfilled*") Then
+		Call docStatus.ReplaceItemValue(f_PWSTAT, "Fulfilled")
+	Else
+		Call docStatus.ReplaceItemValue(f_PWSTAT, docStatus.GetItemValue(f_PWCLSTAT)(0))
+	End If
+
+	If (bHaveMemo) Then
+		' create a link to the closing document
+		If (docStatus.HasItem(f_PWLINK)) Then
+			Call docStatus.RemoveItem(f_PWLINK)
+		End If
+
+		Set rtBody = docStatus.CreateRichTextItem(f_PWLINK)
+		Call rtBody.AppendDocLink(docInbox, "Link to closing email")
+	End If
+
+	' flag this document as closed for view inclusion
+	Call docStatus.ReplaceItemValue(f_PWCLOSE, "1")
+	sFolder = v_TAMFOLDER & docStatus.GetItemValue(f_PWTAM)(0)
+
+	' we have the start date of the request.  now calculate the end date
+	' by adding the duration to the start date
+	Set dtTemp = docStatus.GetFirstItem(f_PWDATE).DateTimeValue
+	Set dtStart = New NotesDateTime(dtTemp.DateOnly & " 08:00:00")
+	Set dtEnd = New NotesDateTime(dtTemp.DateOnly & " 08:00:00")
+
+	' first see if the start date has already passed.  If the current date is > start date (current - start > 0),
+	' then bypass the calendar entries
+	'
+	' the following If statement originally used dtTemp as the source date, but that doesn't make any sense.
+	' dtLog was created with the current date, which is what should be used.
+	Set dtTemp = New NotesDateTime("Today")
+	If (dtLog.TimeDifference(dtStart) > 0) Then
+		bDatePast = True
+		' 6/20/2008: previously the Open and Close dates were forced to the engagement date for requests that had passed.  have removed that action.
+	Else
+		bDatePast = False
+	End If
+	Call docStatus.ReplaceItemValue(f_PWCLOSEDT, dtLog)
+
+	' bypass further processing if request was cancelled by the requestor
+	If (bCancelled) Then
+		Goto ByPass_Reminder
+	End If
+
+	Call pwayLog.LogAction("PathwayCloseRequest(): get the base number of days in the engagement and move the end date" & Chr(13))
+
+	' calculate the number of business days in the engagement and adjust the end date
+	'nDaysFunded = PathwayCloseCount(docStatus, dtEnd)
+	nDaysFunded = PathwayCalcDuration(docStatus.GetItemValue("PWayDuration")(0), docStatus.GetItemValue("PWayDurationType")(0), dtEnd)
+
+	' 9/6/2007: the returned value can now be a fractional value, where the fixed portion
+	' is the days and the fraction is the hours.  separate now for continued processing.
+	nHours = Fraction(nDaysFunded) * 8
+	nDaysFunded = Fix(nDaysFunded)
+
+	' update the end date in case parameters changed
+	Call docStatus.ReplaceItemValue("PWayEndNeeded", dtEnd)
+
+	Call pwayLog.LogAction("PathwayCloseRequest(): create the monthly allocation documents" & Chr(13))
+
+	' create arrays which will map to engagement months and repeating calendar documents
+	Call PathwayCloseArrays(bDatePast, nDaysFunded, dtStart, dtEnd, aEngDates, aRepeat)
+
+	' 8/28/2008
+	' apply utilization ratios and additional providers to the funding totals: weeks, days, hours, cost,...
+	If (nDaysFunded > 0) Then
+		Call pwayLog.LogAction("PathwayCloseRequest(): use monthly allocation documents to calculate total hours and funding" & Chr(13))
+		Call PathwayCloseAllocProviders(docStatus, aEngDates, Cint(nDaysFunded))
+	End If
+
+	' now that the number of funded days is determined, calculate the total funding amount: (Rate * 8 hours * DaysFunded) + Travel&Lodging.
+	' Only T&L is required.
+
+	' 7/28/2006
+	' update calculation to accomodate additional providers.  logic has been moved to subroutine PathwayReqValue.
+	If (docStatus.GetFirstItem(f_PWFUND).Text = "Yes") Then
+		' initialize funding amout with the T&L value
+		nFunding = docStatus.GetItemValue(f_PWTL)(0)
+		Call pwayLog.LogAction("PathwayCloseRequest(); initial funding amount: " & nFunding)
+		If (docStatus.GetFirstItem(f_PWFUNDTOT).Text <> "" And docStatus.GetFirstItem(f_PWFUNDTOT).Text <> "0") Then
+
+			' in this case,  the actual amount was explicitly entered, so just use it
+			nFunding = nFunding + docStatus.GetItemValue(f_PWFUNDTOT)(0)
+			Call pwayLog.LogAction("PathwayCloseRequest(); funding amount after fixed addition: " & nFunding)
+		Else
+
+			' otherwise calculate funding total using providers and utilization ratios and explicit hourly rate
+			If (docStatus.GetFirstItem(f_PWFUNDCOST).Text <> "") Then
+				Call pwayLog.LogAction("PathwayCloseRequest(): get funding amount using custom rate" & Chr(13))
+
+				nFunding = nFunding + PathwayReqValue(docStatus, nDaysFunded, nHours, docStatus.GetItemValue(f_PWFUNDCOST)(0))
+				Call pwayLog.LogAction("PathwayCloseRequest(); funding amount after calculations: " & nFunding)
+			End If
+		End If
+		Call docStatus.ReplaceItemValue(f_PWFUNDTOT, nFunding)
+	End If
+
+	' save the base total days and total hours.  does not include utilization ratios or additional providers
+	' 9/10/20007:  added hours to the cost calculation
+	Call docStatus.ReplaceItemValue(f_PWDAYS, nDaysFunded)
+	Call docStatus.ReplaceItemValue(f_PWHOURS, nHours)
+
+	Call pwayLog.LogAction("PathwayCloseRequest(): get total funding amount using standard rate" & Chr(13))
+
+	' calculate the funding total using the default rate.  includes utilization ratios and additional providers
+	nFunding = PathwayReqValue(docStatus, nDaysFunded, nHours, nRate)
+	Call docStatus.ReplaceItemValue(f_PWCOST, nFunding)
+
+	Call pwayLog.LogAction("PathwayCloseRequest(): get total funding hours" & Chr(13))
+
+	' calculate the total funding hours.  includes utilization ratios and additional providers
+	nFunding = PathwayReqValue(docStatus, nDaysFunded, nHours, 1)
+	Call docStatus.ReplaceItemValue(f_PWBASE, nFunding)
+
+	' convert the total funding hours to business weeks.
+	' 8 hours per day, 5 days per week.
+	Dim nWeeks As Double
+	nWeeks = (nFunding / 8) / 5
+	nWeeks = Round(nWeeks, 1)
+	Call docStatus.ReplaceItemValue("PWayCalcWeeks", nWeeks)
+
+	' =============================================
+	' create calendar entry and send notice to interested parties
+
+	' if the current date is > than the start date (current - start > 0), then bypass the calendar entries
+	If (bDatePast) Then
+		Goto ByPass_Reminder
+	End If
+
+	' build an array of calendar documents
+	' aCalendar = PathwayCloseCalendar(docStatus, dtStart, dtEnd, aRepeat)
+
+	' determine the email address of the resource(s), if a notice should be sent
+	nX = -1
+	If (Len(docStatus.GetItemValue(f_PWADDR)(0)) > 0) Then
+		nX = nX + 1
+		Redim Preserve aNames(nX)
+		aNames(nX) = docStatus.GetItemValue(f_PWADDR)(0)
+		sPrintNames = sPrintNames & aNames(nX) & ", "
+	End If
+
+%REM
+	' Removed Jan 27, 2016
+	' ask if others should be notified of this request closure
+	sNameList = Inputbox$("Enter list of additional calendar reminder recipients", "PATHway Close")
+	If (sNameList <> "") Then
+		nX = Ubound(aNames)
+		' remove extra spaces, then try to remove possible delimiting characters
+		sNameList = Fulltrim(sNameList)
+		If (sNameList Like "*[,;:|]*") Then
+			For nY = 1 To Len(sNameList)
+				If Not (Mid$(sNameList, nY, 1) Like "*[,;:|]*") Then
+					sExtract = sExtract & Mid$(sNameList, nY, 1)
+				Else
+					sExtract = sExtract & "$"
+				End If
+			Next
+			sNameList = sExtract
+		End If
+		Do While Len(sNameList) > 0
+			If (Instr(1, sNameList, "$") > 0) Then
+				nX = nX + 1
+				Redim Preserve aNames(nX)
+				aNames(nX) = Left$(sNameList, Instr(1, sNameList, "$") - 1)
+				sNameList = Right$(sNameList, Len(sNameList) - Instr(1, sNameList, "$"))
+				sPrintNames = sPrintNames & aNames(nX) & ", "
+			Else
+				nX = nX + 1
+				Redim Preserve aNames(nX)
+				aNames(nX) = sNameList
+				sNameList = ""
+				sPrintNames = sPrintNames & aNames(nX) & ", "
+			End If
+		Loop
+	End If
+%END REM
+
+ByPass_Reminder:
+
+	' set any computed fields before completion
+	Call docStatus.Replaceitemvalue("PWayPassword", "")
+	Call docStatus.ComputeWithForm(True, False)
+
+	' test the success of the status document save.  only if it's successful should the associated documents be saved.
+	If (docStatus.Save(True, True, True)) Then
+		bUpdateOK = True
+		Call docStatus.RemoveFromFolder(sFolder)
+
+		' 12-29-2011: Routine will conditionally create a Project document in the WWBP Projects database
+		' 01-27-2016: Routine will conditionally create an Opportunity document in the WW Channel Opportunity database
+		If Not (bCancelled) Then
+			'Call PathwayCreateExternalProject(docStatus)
+			' If the function returns "1" then the user wants to revalidate the resource name,
+			' otherwise processing can continue
+			funcReply = PathwayCreateWWBPProject(docStatus)
+			If (funcReply = 1) Then
+				Error 30110, ""
+			End If
+
+			' A Project document was created, so set the project flags accordingly
+			If (funcReply = 2) Then
+				Call docStatus.Replaceitemvalue("PWayHasProjDB", "1")
+			Else
+				Call docStatus.Replaceitemvalue("PWayHasProjDB", "0")
+			End If
+			Call docStatus.Replaceitemvalue("PWayProjDBStatus", "0")
+			Call docStatus.Save(True, True, True)
+
+			If (docStatus.Getfirstitem("PWayOpportunity").Text = "1") Then
+				Call PathwayCreateOpportunity(docStatus)
+				Call docStatus.Removeitem("PWayOpportunity")
+			End If
+		End If
+
+		' clean up the Inbox document if there is one.  retain the "PWayUnid" field to assist
+		' locating the associated status document in case the request is reopened
+		If (bHaveMemo) Then
+			Forall itm In docInbox.Items
+				If (Ucase$(itm.Name) Like "PWAY*") Then
+					If (itm.Name <> f_PWUNID) Then
+						Call docInbox.RemoveItem(itm.Name)
+					End If
+				End If
+			End Forall
+
+			Call docInbox.Save(True, True, True)
+
+			' move copy of this doc to requestor's folder
+			Call docInbox.PutInFolder(sFolder)
+			Call docInbox.RemoveFromFolder("($Inbox)")
+		End If
+
+		Stop
+		If (Not bCancelled) Then
+			' a special status document will be created for each month in the engagement.  they will be distinguished
+			' from normal status documents in views by the presence of field PWayEngDate
+			Forall byMonth In aEngDates
+				' get the date covered by this document
+				sText = Listtag(byMonth)
+				Call pwayLog.LogAction("PathwayCloseRequest():   create status doc for " & sText  & " with value " & byMonth)
+
+				' create the status doc, copying all fields from the main document and adding the extra fields
+				Set docStatusMonth = db.CreateDocument
+				Call docStatus.CopyAllItems(docStatusMonth)
+				Call docStatusMonth.AppendItemValue(f_PWDATES, sText)
+				Call docStatusMonth.ReplaceItemValue(f_PWDAYS, byMonth)
+
+				' remove logging fields, only need to keep in main version of status doc
+				Call docStatusMonth.RemoveItem(f_PWCOMM)
+				Call docStatusMonth.RemoveItem(f_PWCOMMLOG)
+				Call docStatusMonth.RemoveItem(f_PWREQ)
+
+				Call docStatusMonth.ComputeWithForm(False, False)
+				Call docStatusMonth.Save(True, True, True)
+			End Forall
+
+			' only create the calendar entries if the date hasn't passed.
+			' 2/8/2005: have decided to not create calendar entries for the local db.
+			If Not (bDatePast) Then
+				' send calendar reminder note to the TAM
+				Set docSend = db.CreateDocument
+				Call docSend.ReplaceItemValue("Form", "PWayCal2")
+				Call docSend.ReplaceItemValue("From", PathwayMail)
+				Call docSend.ReplaceItemValue("ReplyTo", PathwayMail)
+				Call docSend.ReplaceItemValue("FromDomain", "ibmus")
+				Call docSend.ReplaceItemValue("PWayDtStart", dtStart)
+				Call docSend.ReplaceItemValue("PWayDtEnd", dtEnd)
+				Call docSend.ReplaceItemValue("PWayAllDates", aRepeat)
+				Call docSend.ReplaceItemValue("PWayISV", docStatus.GetItemValue("PWayISV")(0))
+				Call docSend.ReplaceItemValue("PWayRes", docStatus.GetItemValue("PWayResName")(0))
+				Call docSend.ReplaceItemValue("PWayLoc", docStatus.GetItemValue("PWayLocation")(0))
+				Call docSend.ReplaceItemValue("PWayID", docStatus.GetItemValue("PWayID")(0))
+				Call docSend.ReplaceItemValue("Subject", "PATHway Engagement Reminder for request " & docStatus.GetItemValue("PWayID")(0))
+				Call docStatus.GetFirstItem("PWayResName").CopyItemToDocument(docSend, "")
+
+				' send individually to each recipient, as delivery failures to one will also cancel delivery to
+				' any trailing addresses in the list
+				Forall sendit In aNames
+					If (Len(sendit) > 0) Then
+						Call docSend.ReplaceItemValue("SendTo", sendit)
+						Call docSend.Send(True)
+					End If
+				End Forall
+			End If
+		End If
+
+	End If
+
+Sub_Exit:
+	' Release the locked documents
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.releaseDocuments(False)
+	End If
+
+	' If process completed normally, a couple of more tasks to do
+	If (bUpdateOK) Then
+		' if running on a local replica, try to replicate to pick up the new documents
+		If (db.Server = "" And foundServer) Then
+			db.Replicate(serverName)
+		End If
+
+		Call ws.ViewRefresh
+	End If
+
+	' Explicit close of the log file
+	If (Not pwayLog Is Nothing) Then
+		Call pwayLog.Close
+	End If
+
+	Exit Sub
+
+Sub_Error:
+	If (Err = ERR_CANCEL) Then
+		Resume Sub_Exit
+	End If
+
+	' If the resource name was not found in the WWBP Project db,
+	' restart the close process to revalidate the name value
+	If (Err = 30110) Then
+		Resume NameCheck
+	End If
+
+	' Release locked documents
+	If Not (lockObj Is Nothing) Then
+		Call lockObj.restoreDocuments
+		Call lockObj.releaseDocuments(False)
+	End If
+
+	Call AddToStackTrace()
+
+End Sub
