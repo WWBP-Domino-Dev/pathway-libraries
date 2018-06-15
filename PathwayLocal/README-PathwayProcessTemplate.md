@@ -44,7 +44,7 @@ A single Reply document is created with information on the new request(s) and se
 
 ## Step 4 - Update profile
 
-The global profile document is updated with the new request id and unlocked for
+The global profile document is updated with the new request id and unlocked.
 
 ```
 If (lockObj.checkLock) Then
