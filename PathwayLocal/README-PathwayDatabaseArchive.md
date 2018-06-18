@@ -32,6 +32,15 @@ For the email documents also add them to any requestor folder they may be in.
 ## Step 4 - Post-processing
 
 Flag all archived documents to bypass future archive runs.
+
+```
+For x2 = 0 To UBound(aDocRemove)
+  Set doc = aDocRemove(x2)
+  Call doc.ReplaceItemValue("PWarchived", "1")
+  Call doc.save(False, False)
+Next
+```
+
 The search formulas:
 
 ```
