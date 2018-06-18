@@ -37,6 +37,8 @@ Description:
 	9.	Save the status document.  If the save is successful, save the other documents created in previous steps.
 
 History:
+	6/2018:
+		The Opportunity db is no longer used.
 	6/2017:
 		Added code after the status document is successfully saved to optionally create WWBP Project
 		and Opportunity documents.  If a Project document was created, set flags in the status document
@@ -389,9 +391,6 @@ ByPass_Reminder:
 		' 12-29-2011: Routine will conditionally create a Project document in the WWBP Projects database
 		' 01-27-2016: Routine will conditionally create an Opportunity document in the WW Channel Opportunity database
 		If Not (bCancelled) Then
-			'Call PathwayCreateExternalProject(docStatus)
-			' If the function returns "1" then the user wants to revalidate the resource name,
-			' otherwise processing can continue
 			funcReply = PathwayCreateWWBPProject(docStatus)
 			If (funcReply = 1) Then
 				Error 30110, ""
@@ -405,11 +404,6 @@ ByPass_Reminder:
 			End If
 			Call docStatus.Replaceitemvalue("PWayProjDBStatus", "0")
 			Call docStatus.Save(True, True, True)
-
-			If (docStatus.Getfirstitem("PWayOpportunity").Text = "1") Then
-				Call PathwayCreateOpportunity(docStatus)
-				Call docStatus.Removeitem("PWayOpportunity")
-			End If
 		End If
 
 		' clean up the Inbox document if there is one.  retain the "PWayUnid" field to assist
