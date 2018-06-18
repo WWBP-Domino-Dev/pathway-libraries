@@ -32,4 +32,8 @@ See Mural page https://app.mural.co/t/dougsteam4182/m/dougsteam4182/152933175343
 2. Call library subroutine PathwayCloseAllocProviders() to calculate utilization values for assigned resources
 3. Call library subroutine PATHwayReqValue() to calculate the funding values based on default rate and utilization of assigned resources
 
-## Step 4 - Send notification email to requestor
+## Step 4 - Final steps
+
+1. Call function PathwayCreateWWBPProject() to conditionally create a corresponding document in the WCC Projects database
+2. Create a new supplemental request document for each engagement date
+3. Send email to requestor with button to create a personal calendar entry 
