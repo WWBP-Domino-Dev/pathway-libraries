@@ -35,5 +35,5 @@ Flag all archived documents to bypass future archive runs.
 The search formulas:
 
 ```
-searchReq = {(Form = "Memo" | Form = "Reply") & (@Adjust(@Created; } & x1 & {; 0; 0; 0; 0; 0) < @Now) & ! @IsAvailable(**PWarchived**)}
+searchReq = \{\(Form = "Memo" | Form = "Reply"\) & \(@Adjust\(@Created; \} & x1 & \{; 0; 0; 0; 0; 0\) < @Now\) & ! @IsAvailable\(**PWarchived**\)\}
 ```
