@@ -227,7 +227,8 @@ Sub PathwayDatabaseArchive()
 
 	' preallocate array of documents to be archived
 	searchCount = cd.Count + cdS.Count
-	ReDim aDocHold(searchCount)
+	' 6-18-2018 Disabling this pending deletion
+	' ReDim aDocHold(searchCount)
 	ReDim Preserve aDocRemove(searchCount)
 
 	xR = -1
@@ -308,13 +309,15 @@ NoFolders:
 		On Error GoTo Sub_Error
 
 		' place doc on the commit queues
-		If (xR > UBound(aDocHold)) Then
-			ReDim Preserve aDocHold(xR + 10)
+		If (xR > UBound(aDocRemove)) Then
+			' 6-18-2018 Disabling this pending deletion
+			' ReDim Preserve aDocHold(xR + 10)
 			ReDim Preserve aDocRemove(xR + 10)
 		End If
 
 		' save copy of the archive copy and of the local copy.  this way we can defer committing any changes until all are processed successfully.
-		Set aDochold(xR) = docArch
+		' 6-18-2018 Disabling this pending deletion
+		' Set aDochold(xR) = docArch
 		Set aDocRemove(xR) = doc
 		saved = saved + doc.Size
 Archived_Doc:
@@ -364,13 +367,16 @@ Archived_Doc:
 			Call logMonitor.LogAction("  " & x2 & ".  '" & doc.PWayId(0) & "' Created " & dispdate1 & ", Engagement date " & dispDate2)
 
 			' place doc on the commit queues
-			If (xR > UBound(aDocHold)) Then
-				ReDim Preserve aDocHold(xR + 10)
+			If (xR > UBound(aDocRemove)) Then
+				' 6-18-2018 Disabling this pending deletion
+				' ReDim Preserve aDocHold(xR + 10)
 				ReDim Preserve aDocRemove(xR + 10)
 			End If
 
 			' save copy of the archive copy and of the local copy.  this way we can defer committing any changes until all are processed successfully.
-			Set aDochold(xR) = docArch
+
+			' 6-18-2018 Disabling this pending deletion
+			' Set aDochold(xR) = docArch
 			Set aDocRemove(xR) = doc
 		Else
 			Set dtS = New NotesDateTime(doc.Created)
@@ -395,17 +401,26 @@ Archived_Doc:
 		Set doc = cdS.GetNextDocument(doc)
 	Loop
 
-	' Prepare to commit the documents to the archive database
+	%REM
+		===============================================================================================
+		Prepare to commit the documents to the archive database
+		===============================================================================================
+	%END REM
 	If (bCommit) Then
 		' shrink the commit queues to remove allocated entries never used
-		For x2 = UBound(aDocHold) To 0 Step -1
-			Set doc = aDocHold(x2)
+		For x2 = UBound(aDocRemove) To 0 Step -1
+			Set doc = aDocRemove(x2)
 			If Not (doc Is Nothing) Then
 				Exit For
 			End If
 		Next
-		ReDim Preserve aDocHold(x2)
+
+		' 6-18-2018 Disabling this pending deletion
+		' ReDim Preserve aDocHold(x2)
 		ReDim Preserve aDocRemove(x2)
+
+		' 6-18-2018 Disabling this pending deletion
+		%REM
 
 		' commit the documents created in the archive, currently stored in the aDocHold array
 		Call logMonitor.LogAction("---")
@@ -436,18 +451,21 @@ Archived_Doc:
 			Call doc.Save(True, False)
 SaveNext:
 		Next
+		%END REM
 
-		' now flag the archived documents
+	%REM
+		===============================================================================================
+		Now flag the archived documents to prevent re-archival
+		===============================================================================================
+	%END REM
 		Call logMonitor.LogAction(" ")
-		Call logMonitor.LogAction("Flagging archived documents")
-		Call logSend.LogAction("Flagging archived documents")
+		Call logMonitor.LogAction("Flagging archived documents to prevent re-archival")
+		Call logSend.LogAction("Flagging archived documents to prevent re-archival")
 
 		On Error GoTo Sub_ErrorDelete
 
 		For x2 = 0 To UBound(aDocRemove)
 			Set doc = aDocRemove(x2)
-			logText = "  " & x2 & ". " & Left$(doc.Subject(0), 40) & "' created " & Format$(doc.Created, "mm/dd/yyyy")
-			' Call logMonitor.LogAction("   " & logText)
 			Call doc.ReplaceItemValue("PWarchived", "1")
 			Call doc.save(False, False)
 Deleted_Doc:
@@ -483,13 +501,6 @@ Sub_Error:
 	If (Err = 17412 Or Err = 549 Or Err = 4005) Then
 		Call logSendDebug.LogError(Err, "Resuming with next doc")
 		Resume Archived_Doc
-	End If
-
-	' Sometimes the server fails to respond.  This is probably temporary, so take a nap and try the next one.  If we bail here then none
-	' of the archived documents will be flagged as such, which will cause them to be picked up on the next archive cycle.
-	If (Err = 4000) Then
-		Sleep 10
-		Resume SaveNext
 	End If
 
 	Resume Sub_Exit
