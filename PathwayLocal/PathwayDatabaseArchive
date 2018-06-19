@@ -5,8 +5,13 @@
 Sub PathwayDatabaseArchive()
 
 	%REM
+	
+	6/18/2018 - At some point code was added to save the documents in an array and explicitly save them on the archive db.
+	This is redundant, since the document copy method automatically performs a save.  The corresponding code has been
+	commented out and can be deleted once the current code stream has been validated.
+
 	Archive all documents more than the past 3 calendar years.
-	if today is June 1, 2018.   Archive documents prior to 2015,  Keeping documents from 2015 - 2017 plus the current year.
+	if today is June 1, 2018.   Archive documents prior to 2015,  Keeping documents from 1/1/2015 - 6/1/2018.
 
 	All eligible documents will be copied to the archive.
 		The original copy of the doc will be flagged with a new PWarchived field.  This will
