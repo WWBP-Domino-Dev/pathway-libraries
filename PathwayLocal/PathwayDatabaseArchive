@@ -135,7 +135,7 @@ Sub PathwayDatabaseArchive()
 			Call cd.Removeall(False)
 		End If
 
-		searchReq = {(Form = "PWayData") & (@Adjust(@Created; 5; 0; 0; 0; 0; 0) < @Now)}
+		searchReq = {(Form = "PWayData" | Form = "Resource Request" | Form = "PWayReqTemplate" | Form = "PWayIsv") & (@Adjust(@Created; 5; 0; 0; 0; 0; 0) < @Now)}
 		Set cd = dbArch.Search(searchReq, Nothing, 0)
 		If (cd.Count > 0) Then
 			Call logMonitor.Logaction("From 5 years back, removed " & Str(cd.Count) & " request documents from archive database")
