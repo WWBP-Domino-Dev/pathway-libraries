@@ -126,7 +126,7 @@ Sub PathwayDatabaseArchive()
 		%END REM
 
 		For x1 = 5 To 3 Step -1
-			searchReq = {(Form = "Memo" | Form = "Reply") & (@Adjust(@Created; } & x1 & {; 0; 0; 0; 0; 0) < @Now) & ! @IsAvailable(PWarchived)}
+			searchReq = {(Form = "Memo" | Form = "Reply") & (@Adjust(@Created; } & x1 & {; 0; 0; 0; 0; 0) < @Now)}
 			Set cd = dbArch.Search(searchReq, Nothing, 0)
 			If (cd.Count > 0) Then
 				Call logMonitor.Logaction("From " & Str(x1) & " years back, removed " & Str(cd.Count) & " email documents from archive database")
@@ -136,7 +136,7 @@ Sub PathwayDatabaseArchive()
 			End If
 		Next
 		For x1 = 6 To 4 Step -1
-			searchReq = {(Form = "PWayData") & (@Adjust(@Created; } & x1 & {; 0; 0; 0; 0; 0) < @Now) & ! @IsAvailable(PWarchived)}
+			searchReq = {(Form = "PWayData") & (@Adjust(@Created; } & x1 & {; 0; 0; 0; 0; 0) < @Now)}
 			Set cd = dbArch.Search(searchReq, Nothing, 0)
 			If (cd.Count > 0) Then
 				Call logMonitor.Logaction("From " & Str(x1) & " years back, removed " & Str(cd.Count) & " request documents from archive database")
