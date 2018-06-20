@@ -5,7 +5,7 @@
 Sub PathwayDatabaseArchive()
 
 	%REM
-	
+
 	6/18/2018 - At some point code was added to save the documents in an array and explicitly save them on the archive db.
 	This is redundant, since the document copy method automatically performs a save.  The corresponding code has been
 	commented out and can be deleted once the current code stream has been validated.
@@ -121,11 +121,11 @@ Sub PathwayDatabaseArchive()
 
 		%REM
 			===============================================================================================
-			First cleanup the archive db, remove documents over 5 years in the past
+			First cleanup the archive db, remove documents over 3 or 4 years in the past
 			===============================================================================================
 		%END REM
 
-		For x1 = 8 To 5 Step -1
+		For x1 = 5 To 3 Step -1
 			searchReq = {(Form = "Memo" | Form = "Reply") & (@Adjust(@Created; } & x1 & {; 0; 0; 0; 0; 0) < @Now) & ! @IsAvailable(PWarchived)}
 			Set cd = dbArch.Search(searchReq, Nothing, 0)
 			If (cd.Count > 0) Then
@@ -135,7 +135,7 @@ Sub PathwayDatabaseArchive()
 				Call cd.Removeall(False)
 			End If
 		Next
-		For x1 = 8 To 6 Step -1
+		For x1 = 6 To 4 Step -1
 			searchReq = {(Form = "PWayData") & (@Adjust(@Created; } & x1 & {; 0; 0; 0; 0; 0) < @Now) & ! @IsAvailable(PWarchived)}
 			Set cd = dbArch.Search(searchReq, Nothing, 0)
 			If (cd.Count > 0) Then
