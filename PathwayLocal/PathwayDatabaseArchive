@@ -121,30 +121,28 @@ Sub PathwayDatabaseArchive()
 
 		%REM
 			===============================================================================================
-			First cleanup the archive db, remove documents over 3 or 4 years in the past
+			First cleanup the archive db, remove documents over 5 years in the past
+			Example: Current date = June 1, 2018.   Remove any document created before June 1, 2013
 			===============================================================================================
 		%END REM
 
-		For x1 = 5 To 3 Step -1
-			searchReq = {(Form = "Memo" | Form = "Reply") & (@Adjust(@Created; } & x1 & {; 0; 0; 0; 0; 0) < @Now)}
-			Set cd = dbArch.Search(searchReq, Nothing, 0)
-			If (cd.Count > 0) Then
-				Call logMonitor.Logaction("From " & Str(x1) & " years back, removed " & Str(cd.Count) & " email documents from archive database")
-				Call logSendDebug.Logaction("Search string: '" & searchReq & "'")
-				Call logSendDebug.Logaction("From " & Str(x1) & " years back, removed " & Str(cd.Count) & " email documents from archive database")
-				Call cd.Removeall(False)
-			End If
-		Next
-		For x1 = 6 To 4 Step -1
-			searchReq = {(Form = "PWayData") & (@Adjust(@Created; } & x1 & {; 0; 0; 0; 0; 0) < @Now)}
-			Set cd = dbArch.Search(searchReq, Nothing, 0)
-			If (cd.Count > 0) Then
-				Call logMonitor.Logaction("From " & Str(x1) & " years back, removed " & Str(cd.Count) & " request documents from archive database")
-				Call logSendDebug.Logaction("Search string: '" & searchReq & "'")
-				Call logSendDebug.Logaction("From " & Str(x1) & " years back, removed " & Str(cd.Count) & " request documents from archive database")
-				Call cd.Removeall(False)
-			End If
-		Next
+		searchReq = {(Form = "Memo" | Form = "Reply") & (@Adjust(@Created; 5; 0; 0; 0; 0; 0) < @Now)}
+		Set cd = dbArch.Search(searchReq, Nothing, 0)
+		If (cd.Count > 0) Then
+			Call logMonitor.Logaction("From 5 years back, removed " & Str(cd.Count) & " email documents from archive database")
+			Call logSendDebug.Logaction("Search string: '" & searchReq & "'")
+			Call logSendDebug.Logaction("From 5 years back, removed " & Str(cd.Count) & " email documents from archive database")
+			Call cd.Removeall(False)
+		End If
+
+		searchReq = {(Form = "PWayData") & (@Adjust(@Created; 5; 0; 0; 0; 0; 0) < @Now)}
+		Set cd = dbArch.Search(searchReq, Nothing, 0)
+		If (cd.Count > 0) Then
+			Call logMonitor.Logaction("From 5 years back, removed " & Str(cd.Count) & " request documents from archive database")
+			Call logSendDebug.Logaction("Search string: '" & searchReq & "'")
+			Call logSendDebug.Logaction("From 5 years back, removed " & Str(cd.Count) & " request documents from archive database")
+			Call cd.Removeall(False)
+		End If
 	End If
 
 	%REM
