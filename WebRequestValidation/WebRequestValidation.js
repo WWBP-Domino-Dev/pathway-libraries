@@ -176,6 +176,12 @@ function startValidate(form)
 	if (document.forms[0].PWayValidateSwitch.value == "0") {
 		alert("Validation is disabled, invalid submissions temporarily allowed");
 		document.forms[0].validateMessage.value = "OK";
+		var userName = getCookie("PATHwayUser");
+		if (userName.length == 0) {
+			setCookie("PATHwayUser", emailAddr + "|" + result, 92);
+			document.getElementById('bpauth').className = 'hidden'
+			document.getElementById('operations').className = 'unhidden'
+		}
 		return;
 	}
 }
