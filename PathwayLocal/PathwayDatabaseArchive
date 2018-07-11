@@ -266,7 +266,7 @@ Sub PathwayDatabaseArchive()
 
 	If debug Then
 		Call logMonitor.Logaction("Matched request document count " & Str(cdS.Count))
-		Call logSendDebug.Logaction("Matched request document count " & Str(cd.Count))
+		Call logSendDebug.Logaction("Matched request document count " & Str(cdS.Count))
 	End If
 
 
@@ -479,5 +479,5 @@ Sub_ErrorFolders:
 	End If
 
 	Resume Sub_Exit
-	
+
 End Sub
